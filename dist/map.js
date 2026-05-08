@@ -1,12 +1,12 @@
 // ============================================================
-// RSP Map — v0.6.5
+// RSP Map — v0.6.6
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
 // marker↔sidebar binding via slug. Marker rendering kicks off
-// as soon as items appear in the DOM; it does not wait for the
-// Mapbox style to finish loading (markers attach to the map
-// container regardless of style state).
+// as soon as items appear in the DOM. Forces the page preloader
+// to hide once markers are on screen (Finsweet's late requests
+// were preventing the native `window.load` event from firing).
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -385,8 +385,21 @@ try { (function () {
     addAllMarkers();
     if (!initialRenderDone) {
       bindFilterButtons();
+      hidePreloader();
       initialRenderDone = true;
     }
+  }
+
+  // The Webflow page has a preloader overlay that fades out on
+  // `window.load`. Finsweet's paginated XHRs delay that event,
+  // sometimes indefinitely on slow networks. Hide it ourselves
+  // once the first batch of markers is on screen.
+  function hidePreloader() {
+    var pre = document.querySelector(".preloader");
+    if (!pre) return;
+    pre.style.transition = "opacity 0.4s";
+    pre.style.opacity = "0";
+    setTimeout(function () { pre.style.display = "none"; }, 500);
   }
 
   // Settles a flurry of mutations into a single render call.
@@ -476,7 +489,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.6.5",
+    version: "0.6.6",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -486,7 +499,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.6.5 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.6.6 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
