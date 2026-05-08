@@ -288,10 +288,13 @@ try { (function () {
   }
 
   function setupSourceAndLayers() {
-    if (!map.isStyleLoaded()) return false;
     if (map.getSource(SOURCE_ID)) { sourceAdded = true; return true; }
-
-    map.addSource(SOURCE_ID, {
+    // Mapbox v3 with projection:globe sometimes leaves
+    // isStyleLoaded() returning false even after the style is
+    // visually rendered. We try to add the source and let Mapbox
+    // throw if the style truly is not ready; the caller retries.
+    try {
+      map.addSource(SOURCE_ID, {
       type: "geojson",
       data: visibleFeatureCollection(),
       cluster: true,
@@ -363,9 +366,24 @@ try { (function () {
       }
     });
 
-    attachLayerHandlers();
-    sourceAdded = true;
-    return true;
+      attachLayerHandlers();
+      sourceAdded = true;
+      console.log("[RSP] Source + cluster layers added.");
+      return true;
+    } catch (e) {
+      console.warn("[RSP] addSource not yet ready, will retry:", e && e.message);
+      return false;
+    }
+  }
+
+  // Retry until source/layers are added (typically once style is loaded).
+  function ensureSourceWithRetry() {
+    if (sourceAdded) return;
+    if (setupSourceAndLayers()) {
+      syncSourceData();
+      return;
+    }
+    setTimeout(ensureSourceWithRetry, 400);
   }
 
   // Build a FeatureCollection containing only currently-visible sources.
@@ -537,9 +555,11 @@ try { (function () {
     encounters.forEach(function (e) {
       if (e.source && sourceOrder.indexOf(e.source) < 0) sourceOrder.push(e.source);
     });
-    // Make sure source/layers exist (depends on style being loaded).
-    if (!sourceAdded) setupSourceAndLayers();
-    syncSourceData();
+    // Source/layers may not be addable yet (style still loading).
+    // ensureSourceWithRetry keeps trying until it succeeds, then
+    // pushes data. If already added, just push the new data.
+    if (sourceAdded) syncSourceData();
+    else ensureSourceWithRetry();
     bindFilterButtons();
     if (!initialRenderDone) {
       hidePreloader();
@@ -706,7 +726,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.8.0",
+    version: "0.8.1",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -716,7 +736,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.8.0 boot path attached (clustering). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.8.1 boot path attached (clustering with retry). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
