@@ -795,6 +795,60 @@ function __rsp_main() {
   function clearAllMarkers() { /* no-op now: layers persist across renders */ }
   var markersInitialized = true;
 
+  // ---- Geocoder (search box) -------------------------------
+  // Dynamically loads Mapbox Geocoder plugin and mounts it on
+  // the map. Biased to Syria + neighbours. Localised placeholder.
+  var geocoderMounted = false;
+  function loadGeocoder() {
+    if (geocoderMounted) return;
+    if (typeof MapboxGeocoder !== "undefined") {
+      mountGeocoder();
+      return;
+    }
+    // Inject CSS
+    if (!document.querySelector('link[data-rsp="geocoder-css"]')) {
+      var link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.css";
+      link.setAttribute("data-rsp", "geocoder-css");
+      document.head.appendChild(link);
+    }
+    // Inject JS
+    var s = document.createElement("script");
+    s.src = "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.min.js";
+    s.onload = mountGeocoder;
+    s.onerror = function () { console.warn("[RSP] Geocoder script failed to load"); };
+    document.head.appendChild(s);
+  }
+
+  function mountGeocoder() {
+    if (geocoderMounted) return;
+    if (typeof MapboxGeocoder === "undefined") return;
+    try {
+      var geocoder = new MapboxGeocoder({
+        accessToken: cfg.mapboxToken,
+        mapboxgl: mapboxgl,
+        placeholder: LOCALE === "ar" ? "ابحث عن مكان..." : "Search a place...",
+        countries: "sy,lb,jo,iq,tr",
+        language: LOCALE,
+        marker: false,
+        zoom: 12,
+        flyTo: { speed: 1.5, curve: 1 }
+      });
+      map.addControl(geocoder, LOCALE === "ar" ? "top-left" : "top-right");
+      // RTL adjustment: nudge geocoder a touch into the canvas.
+      var box = document.querySelector(".mapboxgl-ctrl-geocoder");
+      if (box) {
+        box.style.maxWidth = "320px";
+        box.style.minWidth = "240px";
+      }
+      geocoderMounted = true;
+      console.log("[RSP] Geocoder mounted");
+    } catch (e) {
+      console.warn("[RSP] Geocoder mount failed:", e && e.message);
+    }
+  }
+
   // ---- Sidebar binding (stable id-based) --------------------
   function openSidebarFor(locId) {
     jq(".locations-map_wrapper").addClass("is--show");
@@ -921,6 +975,7 @@ function __rsp_main() {
       hideNextButton();
       injectMapStyles();
       buildLegend();
+      loadGeocoder();
       restoreFromUrl();
       initialRenderDone = true;
     }
@@ -1193,7 +1248,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.4",
+    version: "1.0.5",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1203,7 +1258,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.4 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.5 boot path attached (geocoder). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
