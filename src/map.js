@@ -1,5 +1,5 @@
 // ============================================================
-// RSP Map — v0.7.2
+// RSP Map — v0.7.3
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
@@ -134,8 +134,35 @@ try { (function () {
   }
 
   // ---- Source detection from list ---------------------------
+  // Tries three signals in order:
+  //   1. `data-rsp-source` attribute on the list element or its
+  //      Webflow wrapper (.w-dyn-list ancestor). This is the
+  //      authoritative override the editor can set in Designer.
+  //   2. First valid /<collection-slug>/ href inside any item
+  //      (the legacy Visit Profile link pattern).
+  //   3. Returns null when nothing matches (empty list or new
+  //      list without bindings yet).
   function detectSourceFromList(listEl) {
-    // Examine first 3 items' first href, take majority (robustness against stray links).
+    // 1) Explicit attribute, on list itself or its wrapper ancestor.
+    var hint = listEl.getAttribute("data-rsp-source");
+    if (!hint) {
+      var wrap = listEl.closest && listEl.closest(".w-dyn-list");
+      if (wrap) hint = wrap.getAttribute("data-rsp-source");
+    }
+    if (!hint) {
+      var anyAncestor = listEl.parentElement;
+      while (anyAncestor && !hint) {
+        if (anyAncestor.getAttribute) {
+          hint = anyAncestor.getAttribute("data-rsp-source");
+        }
+        anyAncestor = anyAncestor.parentElement;
+      }
+    }
+    if (hint && Object.prototype.hasOwnProperty.call(SOURCES, hint)) {
+      return hint;
+    }
+
+    // 2) Examine first items' first matching href.
     var items = listEl.querySelectorAll(".locations-map_item");
     var counts = {};
     for (var i = 0; i < Math.min(items.length, 6); i++) {
@@ -145,7 +172,7 @@ try { (function () {
         if (!path) continue;
         if (Object.prototype.hasOwnProperty.call(SOURCES, path)) {
           counts[path] = (counts[path] || 0) + 1;
-          break; // first matching link per item
+          break;
         }
       }
     }
@@ -153,7 +180,7 @@ try { (function () {
     for (var k in counts) {
       if (counts[k] > bestN) { bestN = counts[k]; best = k; }
     }
-    return best; // may be null for empty lists
+    return best;
   }
 
   // ---- Build features from DOM lists ------------------------
@@ -579,7 +606,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.7.2",
+    version: "0.7.3",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -589,7 +616,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.7.2 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.7.3 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
