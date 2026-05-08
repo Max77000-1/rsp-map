@@ -1,5 +1,5 @@
 // ============================================================
-// RSP Map — v0.7.1
+// RSP Map — v0.7.2
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
@@ -205,24 +205,28 @@ try { (function () {
   }
 
   function discoverAndProcess() {
-    clearFeatures();
+    // We do NOT clearFeatures(): processedIds prevents duplicate
+    // entries, and keeping accumulated features lets `__rsp.features()`
+    // reflect the full state for diagnostics.
     var lists = document.querySelectorAll('[id^="location-list"]');
-    var report = {};
+    // Encounter-ordered list of {source, added}. Indexed by DOM
+    // position so duplicate IDs (Webflow paginated wrappers all
+    // sharing id="location-list5") don't collapse into one entry.
+    var encounters = [];
     for (var i = 0; i < lists.length; i++) {
       var listEl = lists[i];
       var source = detectSourceFromList(listEl);
       if (!source) {
-        // Empty list (e.g., organization-and-initiative). Try attribute hint or skip.
-        report[listEl.id] = { source: null, added: 0 };
+        encounters.push({ index: i, listId: listEl.id, source: null, added: 0 });
         continue;
       }
       var added = processList(listEl, source);
-      report[listEl.id] = { source: source, added: added };
+      encounters.push({ index: i, listId: listEl.id, source: source, added: added });
       if (visibility[source] === undefined) visibility[source] = true;
     }
-    console.log("[RSP] Source discovery:", report,
+    console.log("[RSP] Source discovery:", encounters,
                 "totalFeatures:", mapLocations.features.length);
-    return report;
+    return encounters;
   }
 
   // ---- Markers ----------------------------------------------
@@ -408,13 +412,10 @@ try { (function () {
   var initialRenderDone = false;
 
   function renderNow() {
-    var report = discoverAndProcess();
-    var newSources = Object.keys(report)
-      .map(function (k) { return report[k].source; })
-      .filter(function (s) { return s; });
-    // Maintain sourceOrder in encounter order, de-duplicated.
-    newSources.forEach(function (s) {
-      if (sourceOrder.indexOf(s) < 0) sourceOrder.push(s);
+    var encounters = discoverAndProcess();
+    // Build/extend sourceOrder by DOM-position encounter, deduplicated.
+    encounters.forEach(function (e) {
+      if (e.source && sourceOrder.indexOf(e.source) < 0) sourceOrder.push(e.source);
     });
     addAllMarkers();
     // Re-run on every render so late-arriving sources from
@@ -578,7 +579,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.7.1",
+    version: "0.7.2",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -588,7 +589,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.7.1 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.7.2 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
