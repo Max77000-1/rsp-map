@@ -231,7 +231,42 @@ function __rsp_main() {
     for (var k in counts) {
       if (counts[k] > bestN) { bestN = counts[k]; best = k; }
     }
-    return best;
+    if (best) return best;
+
+    // 3) Slug pattern heuristic. Items in CMS collections often
+    //    have predictable slug shapes:
+    //      projects → "...-project-..." or "..-project"
+    //      tenders  → "tender-..." or "...-tender-..."
+    //    If a majority of sampled items match one of these
+    //    patterns, classify the whole list. This rescues lists
+    //    that lack Visit Profile links and lack data-rsp-source.
+    var slugPatterns = {
+      "projects": /(^|-)project($|-|s($|-))/i,
+      "tenders":  /(^|-)tender($|-|s($|-))/i
+    };
+    var sampled = Math.min(items.length, 8);
+    if (sampled > 0) {
+      var hits = {};
+      for (var i2 = 0; i2 < sampled; i2++) {
+        var idI = items[i2].querySelector('input[id="locationID"]');
+        if (!idI || !idI.value) continue;
+        var slug = idI.value;
+        for (var key in slugPatterns) {
+          if (slugPatterns[key].test(slug)) {
+            hits[key] = (hits[key] || 0) + 1;
+          }
+        }
+      }
+      var bestKey = null, bestHits = 0;
+      for (var kk in hits) {
+        if (hits[kk] > bestHits) { bestHits = hits[kk]; bestKey = kk; }
+      }
+      // Require majority of sampled items to match.
+      if (bestKey && bestHits >= Math.ceil(sampled / 2)) {
+        return bestKey;
+      }
+    }
+    return null;
   }
 
   // ---- Build features from DOM lists ------------------------
@@ -1158,7 +1193,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.3",
+    version: "1.0.4",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1168,7 +1203,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.3 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.4 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
