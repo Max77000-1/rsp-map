@@ -1,9 +1,11 @@
 // ============================================================
-// RSP Map — v1.0.0
+// RSP Map — v1.0.1
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness, stable marker↔sidebar binding via slug.
 // Native Mapbox cluster layers + zoom-aware polygon overlays.
+// Terrain DEM + sky + 3D fill-extrusion buildings.
+// URL state for deep links, floating legend, EN/AR i18n.
 //
 // Phase 6 (v1.0.0): terrain + sky + 3D buildings.
 //  - Mapbox terrain DEM gives Syrian mountains real elevation.
@@ -72,15 +74,36 @@ try { (function () {
   // ---- Source registry --------------------------------------
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
-    "companies":                   { label: "شركات ومكاتب",       color: "#4DA1A9", iconKey: "companies" },
-    "projects":                    { label: "مشاريع",              color: "#2E5077", iconKey: "projects" },
-    "investment-opportunities":    { label: "فرص استثمارية",       color: "#D4A14D", iconKey: "investments" },
-    "destruction-area":            { label: "مناطق منكوبة",        color: "#D46D6D", iconKey: "destruction" },
-    "tenders":                     { label: "مناقصات",             color: "#5A7492", iconKey: "tenders" },
-    "locations":                   { label: "مواقع جغرافية",       color: "#8698AC", iconKey: "locations" },
-    "blog":                        { label: "مدوّنة وأخبار",       color: "#99C5CB", iconKey: "blog" },
-    "organization-and-initiative": { label: "منظمات ومبادرات",     color: "#5FBF7C", iconKey: "orgs" }
+    "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#4DA1A9", iconKey: "companies" },
+    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#2E5077", iconKey: "projects" },
+    "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
+    "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
+    "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
+    "locations":                   { ar: "مواقع جغرافية",  en: "Locations",            color: "#8698AC", iconKey: "locations" },
+    "blog":                        { ar: "مدوّنة وأخبار",  en: "News & Blog",          color: "#99C5CB", iconKey: "blog" },
+    "organization-and-initiative": { ar: "منظمات ومبادرات", en: "Orgs. & Initiatives", color: "#5FBF7C", iconKey: "orgs" }
   };
+
+  // Active locale: "ar" or "en". Detect from <html lang> or URL.
+  function detectLocale() {
+    var path = (location.pathname || "").toLowerCase();
+    if (/^\/ar(\/|$)/.test(path)) return "ar";
+    var html = document.documentElement.getAttribute("lang") || "";
+    if (html.toLowerCase().indexOf("ar") === 0) return "ar";
+    return "en";
+  }
+  var LOCALE = detectLocale();
+  function sourceLabel(src) {
+    var meta = SOURCES[src] || {};
+    return meta[LOCALE] || meta.en || meta.ar || src;
+  }
+  // Static UI text
+  var T = {
+    legendTitle: { ar: "الفئات", en: "Categories" },
+    legendHide:  { ar: "إخفاء", en: "Hide" },
+    legendShow:  { ar: "إظهار", en: "Show" }
+  };
+  function t(k) { return (T[k] && (T[k][LOCALE] || T[k].en)) || k; }
 
   // Existing CDN-hosted icons. Reused for now; Phase 1 introduces a unified sprite.
   var ICON_URLS = {
@@ -723,6 +746,8 @@ try { (function () {
     var target = document.querySelector('.locations-map_item[data-loc-id="' + safe + '"]');
     if (target) target.classList.add("is--show");
     else console.warn("[RSP] No sidebar item for id:", locId);
+    // Reflect in URL so the link can be shared.
+    if (typeof writeUrlState === "function") writeUrlState({ id: locId });
   }
 
   // ---- Filter toggles ---------------------------------------
@@ -738,7 +763,7 @@ try { (function () {
       var raw = document.getElementById(rawId);
       if (!raw) return; // button not present in this page
       raw.setAttribute("data-rsp-src", src);
-      raw.setAttribute("title", (SOURCES[src] && SOURCES[src].label) || src);
+      raw.setAttribute("title", sourceLabel(src));
       // Click via jQuery (works with digit-leading IDs); fall back to vanilla.
       var $btn = jq("#" + rawId);
       if ($btn && $btn.on) {
@@ -768,6 +793,7 @@ try { (function () {
   jq(".close-block").on("click", function () {
     jq(".locations-map_wrapper").removeClass("is--show");
     stopRotation();
+    if (typeof writeUrlState === "function") writeUrlState({ id: null });
   });
 
   jq("#RestMap").on("click", function () {
@@ -837,14 +863,126 @@ try { (function () {
       hidePreloader();
       hideNextButton();
       injectMapStyles();
+      buildLegend();
+      restoreFromUrl();
       initialRenderDone = true;
     }
   }
+
+  // ---- URL state (deep links) -------------------------------
+  // Reads ?id, ?center, ?zoom from the URL on first render and
+  // applies them. After every fly/click on a marker, replaces the
+  // URL so the page is shareable. Uses replaceState (not push)
+  // so the browser back button still navigates pages, not pins.
+  function readUrlState() {
+    try {
+      var p = new URLSearchParams(location.search);
+      var st = {};
+      if (p.has("id")) st.id = p.get("id");
+      if (p.has("zoom")) st.zoom = parseFloat(p.get("zoom"));
+      if (p.has("center")) {
+        var parts = (p.get("center") || "").split(",").map(parseFloat);
+        if (parts.length === 2 && !parts.some(isNaN)) st.center = parts;
+      }
+      if (p.has("source")) st.source = p.get("source");
+      return st;
+    } catch (e) { return {}; }
+  }
+  function writeUrlState(state) {
+    try {
+      var p = new URLSearchParams(location.search);
+      Object.keys(state || {}).forEach(function (k) {
+        var v = state[k];
+        if (v === null || v === undefined || v === "") p.delete(k);
+        else if (Array.isArray(v)) p.set(k, v.map(function (n) { return n.toFixed(4); }).join(","));
+        else p.set(k, String(v));
+      });
+      var qs = p.toString();
+      var newUrl = location.pathname + (qs ? "?" + qs : "") + location.hash;
+      history.replaceState(null, "", newUrl);
+    } catch (e) {}
+  }
+  function restoreFromUrl() {
+    var st = readUrlState();
+    if (st.center && !isNaN(st.zoom)) {
+      map.flyTo({ center: st.center, zoom: st.zoom, speed: 1.5, curve: 1 });
+    } else if (st.center) {
+      map.flyTo({ center: st.center, speed: 1.5, curve: 1 });
+    }
+    if (st.id) {
+      // Wait briefly for features to be in source, then fly to it.
+      setTimeout(function () {
+        var f = mapLocations.features.find(function (ff) { return ff.properties.id === st.id; });
+        if (!f) return;
+        map.flyTo({ center: f.geometry.coordinates, zoom: Math.max(map.getZoom(), 13), speed: 1.5, curve: 1 });
+        openSidebarFor(st.id);
+      }, 500);
+    }
+  }
+  // Update the URL on every map move so users can copy a link
+  // representing exactly what they see. Throttled to moveend.
+  map.on("moveend", function () {
+    if (!initialRenderDone) return;
+    var c = map.getCenter();
+    writeUrlState({
+      center: [c.lng, c.lat],
+      zoom: +map.getZoom().toFixed(2)
+    });
+  });
 
   // Hide the "Next" random-marker button (#Next).
   function hideNextButton() {
     var btn = document.getElementById("Next");
     if (btn) btn.style.setProperty("display", "none", "important");
+  }
+
+  // ---- Floating legend --------------------------------------
+  // Auto-built from active sources. RTL/LTR aware via LOCALE.
+  // Toggleable by clicking the title bar.
+  function buildLegend() {
+    if (document.getElementById("rsp-legend")) return;
+    var rtl = LOCALE === "ar";
+    var box = document.createElement("div");
+    box.id = "rsp-legend";
+    box.dir = rtl ? "rtl" : "ltr";
+    box.style.cssText =
+      "position:absolute;bottom:18px;" + (rtl ? "left" : "right") + ":18px;" +
+      "background:rgba(255,255,255,0.96);backdrop-filter:blur(6px);" +
+      "border-radius:12px;padding:10px 14px;font-family:inherit;" +
+      "box-shadow:0 4px 14px rgba(0,0,0,0.18);z-index:10;" +
+      "min-width:160px;max-width:240px;font-size:13px;color:#1a2329;";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-weight:600;margin-bottom:8px;color:#2E5077;";
+    head.innerHTML = "<span>" + t("legendTitle") + "</span><span style='font-size:11px;color:#888;font-weight:400' id='rsp-legend-toggle'>" + t("legendHide") + "</span>";
+    box.appendChild(head);
+    var body = document.createElement("div");
+    body.id = "rsp-legend-body";
+    Object.keys(SOURCES).forEach(function (src) {
+      var meta = SOURCES[src];
+      var row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;";
+      row.innerHTML =
+        '<span style="width:11px;height:11px;border-radius:50%;background:' + meta.color + ';border:2px solid white;box-shadow:0 0 0 1px rgba(0,0,0,0.15);flex-shrink:0;"></span>' +
+        '<span>' + sourceLabel(src) + '</span>';
+      body.appendChild(row);
+    });
+    box.appendChild(body);
+
+    head.addEventListener("click", function () {
+      var hidden = body.style.display === "none";
+      body.style.display = hidden ? "" : "none";
+      document.getElementById("rsp-legend-toggle").textContent = hidden ? t("legendHide") : t("legendShow");
+    });
+
+    // Mount inside the map container so it sits over the canvas.
+    var host = document.getElementById("map");
+    if (host) {
+      // Ensure host can host absolute children
+      if (getComputedStyle(host).position === "static") host.style.position = "relative";
+      host.appendChild(box);
+    } else {
+      document.body.appendChild(box);
+    }
   }
 
   // Inject a stylesheet that:
@@ -998,7 +1136,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.0",
+    version: "1.0.1",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1008,7 +1146,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.0 boot path attached (terrain+sky+3d-buildings). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.1 boot path attached (URL state, legend, i18n). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
