@@ -496,33 +496,45 @@ try { (function () {
       }
     });
 
-    // Individual unclustered points. Polygon centroids fade to 0
-    // at POLYGON_MIN_ZOOM so the polygon owns the screen there.
+    // Two layers for unclustered points:
+    //  • non-polygon points (real markers): always visible
+    //  • polygon centroids: visible only at zoom < POLYGON_MIN_ZOOM
+    //    (maxzoom on the layer hides them once polygons take over).
+    var basePointPaint = {
+      "circle-color": colourMatchExpr(),
+      "circle-radius": [
+        "interpolate", ["linear"], ["zoom"],
+        5, 5,
+        10, 7,
+        15, 10
+      ],
+      "circle-stroke-width": 2,
+      "circle-stroke-color": "#ffffff",
+      "circle-opacity": 0.95
+    };
+
     map.addLayer({
       id: "rsp-points",
       type: "circle",
       source: SOURCE_ID,
-      filter: ["!", ["has", "point_count"]],
-      paint: {
-        "circle-color": colourMatchExpr(),
-        "circle-radius": [
-          "interpolate", ["linear"], ["zoom"],
-          5, 5,
-          10, 7,
-          15, 10
-        ],
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#ffffff",
-        "circle-opacity": [
-          "case",
-          ["all",
-            ["==", ["get", "isPolygonCentroid"], true],
-            [">=", ["zoom"], POLYGON_MIN_ZOOM]
-          ],
-          0,
-          0.95
-        ]
-      }
+      filter: ["all",
+        ["!", ["has", "point_count"]],
+        ["!=", ["get", "isPolygonCentroid"], true]
+      ],
+      paint: basePointPaint
+    });
+
+    // Centroid markers for polygon items, hidden once polygons render.
+    map.addLayer({
+      id: "rsp-points-centroid",
+      type: "circle",
+      source: SOURCE_ID,
+      maxzoom: POLYGON_MIN_ZOOM,
+      filter: ["all",
+        ["!", ["has", "point_count"]],
+        ["==", ["get", "isPolygonCentroid"], true]
+      ],
+      paint: basePointPaint
     });
 
     // ---- Polygon source + layers ----------------------------
@@ -681,8 +693,8 @@ try { (function () {
       });
     });
 
-    // Click on single point: fly + open sidebar.
-    map.on("click", "rsp-points", function (e) {
+    // Click on single point: fly + open sidebar (both layers).
+    function handlePointClick(e) {
       var f = e.features && e.features[0];
       if (!f) return;
       var coords = f.geometry.coordinates.slice();
@@ -690,13 +702,17 @@ try { (function () {
       stopRotation();
       map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 12), speed: 0.7, curve: 1 });
       openSidebarFor(locId);
-    });
+    }
+    map.on("click", "rsp-points", handlePointClick);
+    map.on("click", "rsp-points-centroid", handlePointClick);
 
     // Cursor styling
     map.on("mouseenter", "rsp-clusters", function () { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "rsp-clusters", function () { map.getCanvas().style.cursor = ""; });
     map.on("mouseenter", "rsp-points", function () { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "rsp-points", function () { map.getCanvas().style.cursor = ""; });
+    map.on("mouseenter", "rsp-points-centroid", function () { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "rsp-points-centroid", function () { map.getCanvas().style.cursor = ""; });
 
     // ---- Polygon click + hover -----------------------------
     var hoveredPolyId = null;
@@ -1136,7 +1152,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.1",
+    version: "1.0.2",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1146,7 +1162,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.1 boot path attached (URL state, legend, i18n). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.2 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
