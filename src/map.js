@@ -667,8 +667,8 @@ try { (function () {
         if (Date.now() - idleSince > 30000) {
           observer.disconnect();
           clearInterval(idleTimer);
-          console.log("[RSP] Continuous renderer stopped after idle. Final marker count:",
-            Object.keys(renderedIds).length);
+          console.log("[RSP] Continuous renderer stopped after idle. Final feature count:",
+            mapLocations.features.length);
         }
       } else {
         idleSince = Date.now();
@@ -726,17 +726,17 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.8.1",
+    version: "0.8.2",
     map: map,
     config: cfg,
     sources: SOURCES,
     features: function () { return mapLocations.features.slice(); },
-    rendered: function () { return Object.keys(renderedIds).length; },
+    rendered: function () { return mapLocations.features.length; },
     processed: function () { return Object.keys(processedIds).length; },
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.8.1 boot path attached (clustering with retry). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.8.2 boot path attached (clustering, no renderedIds). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
