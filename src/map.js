@@ -1,14 +1,11 @@
 // ============================================================
-// RSP Map — v0.6.3
+// RSP Map — v0.6.4
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
-// marker↔sidebar binding via slug. Defensive boot path for the
-// case where the Mapbox `load` event already fired before our
-// listener attached. Diagnostic surface on window.__rsp.
-//
-// v0.6.3: top-level try/catch surfaces any boot-time error to
-// window.__rsp_err so silent failures become visible.
+// marker↔sidebar binding via slug. Robust boot: polls
+// map.loaded() instead of relying on `load` event timing.
+// Diagnostic surface on window.__rsp.
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -468,22 +465,32 @@ try { (function () {
     });
   }
 
-  // Defensive: if map.loaded() is already true, the "load" event has
-  // fired and a fresh listener won't run.
-  if (map.loaded && map.loaded()) {
-    console.log("[RSP] map already loaded; booting immediately");
+  // Robust boot: Mapbox's "load" event listener can be registered
+  // after the event already fired (race in defer-script timing).
+  // Belt-and-suspenders: register the listener AND poll map.loaded().
+  // Whichever path resolves first triggers boot. A guard in boot()
+  // prevents double-execution.
+  var booted = false;
+  function safeBoot(reason) {
+    if (booted) return;
+    booted = true;
+    console.log("[RSP] booting via " + reason);
     boot();
-  } else {
-    map.on("load", function () {
-      console.log("[RSP] map load event fired");
-      boot();
-    });
   }
+  map.on("load", function () { safeBoot("load-event"); });
+  // Belt: in case the load event was missed, poll for ~12s.
+  var bootPoll = setInterval(function () {
+    if (map.loaded && map.loaded()) {
+      clearInterval(bootPoll);
+      safeBoot("loaded-poll");
+    }
+  }, 250);
+  setTimeout(function () { clearInterval(bootPoll); }, 12000);
 
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.6.3",
+    version: "0.6.4",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -493,7 +500,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.6.3 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.6.4 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
