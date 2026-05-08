@@ -1,9 +1,15 @@
 // ============================================================
-// RSP Map — v0.9.0
+// RSP Map — v1.0.0
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness, stable marker↔sidebar binding via slug.
 // Native Mapbox cluster layers + zoom-aware polygon overlays.
+//
+// Phase 6 (v1.0.0): terrain + sky + 3D buildings.
+//  - Mapbox terrain DEM gives Syrian mountains real elevation.
+//  - Atmospheric sky layer at the horizon.
+//  - Polygon items with `model-height-m > 0` render as
+//    extruded buildings at zoom >= 13.
 //
 // Phase 3 (v0.9.0): polygons.
 //  - Item with `geometry-type=polygon` and a parseable
@@ -102,7 +108,9 @@ try { (function () {
     style: styleUrl,
     center: initialCenter,
     zoom: initialZoom,
-    pitch: 0,
+    // A small initial pitch lets the user perceive terrain
+    // depth straight away. Reset button returns to flat.
+    pitch: cfg.pitch !== undefined ? cfg.pitch : 18,
     bearing: 0,
     projection: "globe"
   });
@@ -282,10 +290,14 @@ try { (function () {
       var idI  = item.querySelector('input[id="locationID"]');
       var typeI = item.querySelector('input[id="locationGeometryType"]');
       var polyI = item.querySelector('input[id="locationPolygon"]');
+      var heightI = item.querySelector('input[id="locationModelHeight"]');
       var card = item.querySelector(".locations-map_card");
 
       var geomType = (typeI && typeI.value || "point").toLowerCase().trim();
       var rawPoly = polyI && polyI.value || "";
+      var rawHeight = heightI && heightI.value;
+      var heightM = rawHeight ? parseFloat(rawHeight) : NaN;
+      if (isNaN(heightM) || heightM <= 0) heightM = 0;
 
       // Try polygon parse first if requested; fall back to point on failure.
       var polygonGeom = null;
@@ -334,7 +346,8 @@ try { (function () {
           properties: {
             id: locId,
             source: source,
-            description: description
+            description: description,
+            height: heightM
           }
         });
       }
@@ -528,6 +541,56 @@ try { (function () {
         "line-opacity": 0.95
       }
     }, "rsp-points");
+
+      // ---- 3D buildings (fill-extrusion) -------------------
+      // Renders polygon items whose `height` property is > 0.
+      // Activates at zoom >= 13 to avoid weird shapes at small scales.
+      map.addLayer({
+        id: "rsp-buildings",
+        type: "fill-extrusion",
+        source: POLY_SOURCE_ID,
+        minzoom: 13,
+        filter: [">", ["to-number", ["get", "height"]], 0],
+        paint: {
+          "fill-extrusion-color": colourMatchExpr(),
+          "fill-extrusion-height": ["to-number", ["get", "height"]],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0.85,
+          "fill-extrusion-vertical-gradient": true
+        }
+      });
+
+      // ---- Terrain (DEM) + Sky -----------------------------
+      // Real elevation data (Syrian mountains visible in 3D when
+      // pitch > 0). Sky layer adds an atmospheric horizon.
+      try {
+        if (!map.getSource("mapbox-dem")) {
+          map.addSource("mapbox-dem", {
+            type: "raster-dem",
+            url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+            tileSize: 512,
+            maxzoom: 14
+          });
+        }
+        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
+      } catch (e) {
+        console.warn("[RSP] Terrain not available:", e && e.message);
+      }
+      try {
+        if (!map.getLayer("rsp-sky")) {
+          map.addLayer({
+            id: "rsp-sky",
+            type: "sky",
+            paint: {
+              "sky-type": "atmosphere",
+              "sky-atmosphere-sun": [0.0, 90.0],
+              "sky-atmosphere-sun-intensity": 15
+            }
+          });
+        }
+      } catch (e) {
+        console.warn("[RSP] Sky layer not available:", e && e.message);
+      }
 
       attachLayerHandlers();
       sourceAdded = true;
@@ -935,7 +998,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.9.0",
+    version: "1.0.0",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -945,7 +1008,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.9.0 boot path attached (polygons enabled). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.0 boot path attached (terrain+sky+3d-buildings). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
