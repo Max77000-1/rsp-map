@@ -1,12 +1,21 @@
 // ============================================================
-// RSP Map — v0.6.6
+// RSP Map — v0.7.0
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
-// marker↔sidebar binding via slug. Marker rendering kicks off
-// as soon as items appear in the DOM. Forces the page preloader
-// to hide once markers are on screen (Finsweet's late requests
-// were preventing the native `window.load` event from firing).
+// marker↔sidebar binding via slug.
+//
+// v0.7.0:
+//  - Markers rendered as colored dots using brand palette per
+//    source (no icon images).
+//  - Filter buttons receive a data-src attribute and are tinted
+//    to match their source color, with an unmistakable active
+//    state injected via stylesheet so the styling does not
+//    depend on user-side CSS.
+//  - The "Next" random-marker button (#Next) is hidden by the
+//    map module to remove an unwanted UX path.
+//  - Filter button binding re-runs on every render so late-
+//    arriving sources (Finsweet pages) get wired correctly.
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -230,11 +239,19 @@ try { (function () {
 
   function makeMarkerEl(source) {
     var el = document.createElement("div");
-    el.className = "custom-marker";
-    el.style.cssText = "width:1.2rem;height:1.2rem;background-size:cover;background-repeat:no-repeat;cursor:pointer;border-radius:50%;";
-    var key = (SOURCES[source] && SOURCES[source].iconKey) || source;
-    var url = ICON_URLS[key] || ICON_URLS.companies;
-    el.style.backgroundImage = "url('" + url + "')";
+    el.className = "custom-marker custom-marker--" + source;
+    var color = (SOURCES[source] && SOURCES[source].color) || "#4DA1A9";
+    // Solid colored dot with subtle white ring + soft outer glow.
+    // No icon image. Sized to read clearly at country zoom and
+    // not crowd at city zoom.
+    el.style.cssText =
+      "width:14px;height:14px;border-radius:50%;cursor:pointer;" +
+      "background:" + color + ";" +
+      "border:2px solid #ffffff;" +
+      "box-shadow:0 0 0 1px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.25);" +
+      "transition:transform 0.15s ease;";
+    el.addEventListener("mouseenter", function () { el.style.transform = "scale(1.35)"; });
+    el.addEventListener("mouseleave", function () { el.style.transform = "scale(1)"; });
     return el;
   }
 
@@ -294,11 +311,21 @@ try { (function () {
   // Backwards-compatible #1cms..#9cms wired by source order.
   // Order respects natural list discovery sequence.
   var sourceOrder = []; // populated after discovery
+  var boundButtons = Object.create(null); // src -> true once bound
 
   function bindFilterButtons() {
     sourceOrder.forEach(function (src, idx) {
+      if (boundButtons[src]) return;
       var btnId = "#" + (idx + 1) + "cms";
-      jq(btnId).on("click", function () { toggleSource(src); }).addClass("is--active");
+      var $btn = jq(btnId);
+      var raw = document.querySelector(btnId);
+      if (raw) {
+        raw.setAttribute("data-rsp-src", src);
+        raw.setAttribute("title", (SOURCES[src] && SOURCES[src].label) || src);
+      }
+      $btn.on("click", function () { toggleSource(src); });
+      $btn.addClass("is--active");
+      boundButtons[src] = true;
     });
   }
 
@@ -383,11 +410,66 @@ try { (function () {
       if (sourceOrder.indexOf(s) < 0) sourceOrder.push(s);
     });
     addAllMarkers();
+    // Re-run on every render so late-arriving sources from
+    // Finsweet's paginated batches get their buttons wired too.
+    bindFilterButtons();
     if (!initialRenderDone) {
-      bindFilterButtons();
       hidePreloader();
+      hideNextButton();
+      injectMapStyles();
       initialRenderDone = true;
     }
+  }
+
+  // Hide the "Next" random-marker button (#Next).
+  function hideNextButton() {
+    var btn = document.getElementById("Next");
+    if (btn) btn.style.display = "none";
+  }
+
+  // Inject a stylesheet that:
+  //  - tints each filter button with its source color (active state)
+  //  - dims the inactive state
+  //  - styles the popup neatly
+  // Idempotent: skips if already injected.
+  var stylesInjected = false;
+  function injectMapStyles() {
+    if (stylesInjected) return;
+    stylesInjected = true;
+
+    var css = [
+      // Filter buttons baseline (when not active = greyed out)
+      ".cms_button:not(.is--active),[id$=\"cms\"]:not(.is--active){opacity:0.45;filter:grayscale(0.6);transition:opacity 0.2s,filter 0.2s,box-shadow 0.2s;}",
+      ".cms_button.is--active,[id$=\"cms\"].is--active{opacity:1;filter:none;}",
+
+      // Active state coloured ring per source. Border + soft glow.
+      // Uses data-rsp-src to be order-independent.
+    ];
+    Object.keys(SOURCES).forEach(function (src) {
+      var c = SOURCES[src].color;
+      css.push(
+        "[data-rsp-src=\"" + src + "\"].is--active{" +
+          "box-shadow:0 0 0 2px " + c + ", 0 0 0 4px " + c + "33;" +
+          "border-radius:10px;" +
+        "}"
+      );
+      // Coloured dot indicator next to the button (small bottom strip).
+      css.push(
+        "[data-rsp-src=\"" + src + "\"]{position:relative;}" +
+        "[data-rsp-src=\"" + src + "\"]::after{" +
+          "content:\"\";position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);" +
+          "width:6px;height:6px;border-radius:50%;background:" + c + ";" +
+        "}"
+      );
+    });
+
+    // Marker hover label
+    css.push(".custom-marker:hover{z-index:10;}");
+
+    var styleEl = document.createElement("style");
+    styleEl.setAttribute("data-rsp", "map-styles");
+    styleEl.textContent = css.join("\n");
+    document.head.appendChild(styleEl);
   }
 
   // The Webflow page has a preloader overlay that fades out on
@@ -489,7 +571,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.6.6",
+    version: "0.7.0",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -499,7 +581,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.6.6 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.7.0 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
