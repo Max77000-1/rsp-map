@@ -1,16 +1,20 @@
 // ============================================================
-// RSP Map — v0.8.0
+// RSP Map — v0.9.0
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness, stable marker↔sidebar binding via slug.
+// Native Mapbox cluster layers + zoom-aware polygon overlays.
 //
-// Phase 1: native Mapbox GeoJSON source with clustering.
-// Replaces DOM-based mapboxgl.Marker objects with three
-// layers: cluster circles, cluster count labels, and
-// individual coloured points. Click on cluster → zoom in.
-// Click on individual point → open sidebar by slug.
-// Filters re-render the source data, which re-clusters
-// automatically.
+// Phase 3 (v0.9.0): polygons.
+//  - Item with `geometry-type=polygon` and a parseable
+//    `polygon-geojson` field renders as a filled polygon
+//    bounded by a coloured stroke.
+//  - At low zoom (< 9) a centroid dot represents the area.
+//  - At high zoom (>= 9) the polygon is drawn and the
+//    centroid dot is hidden so it does not double-up.
+//  - Centroid is auto-computed if Lat/Lng are blank.
+//  - The polygon-geojson field accepts FeatureCollection,
+//    Feature, raw Geometry, or just a coordinates array.
 //
 // v0.7.0:
 //  - Markers rendered as colored dots using brand palette per
@@ -194,16 +198,79 @@ try { (function () {
   }
 
   // ---- Build features from DOM lists ------------------------
+  // Two parallel feature collections:
+  //   • mapLocations  — Point features (centroids for polygons or
+  //                     ordinary points). Source for cluster layer.
+  //   • mapPolygons   — Polygon features. Source for fill/line layers.
   var mapLocations = { type: "FeatureCollection", features: [] };
-  var markerGroups = {};   // source -> array of mapboxgl.Marker
-  var visibility = {};     // source -> bool
+  var mapPolygons  = { type: "FeatureCollection", features: [] };
+  var markerGroups = {};
+  var visibility = {};
 
   function clearFeatures() {
     mapLocations = { type: "FeatureCollection", features: [] };
+    mapPolygons  = { type: "FeatureCollection", features: [] };
   }
 
-  // Track which slugs already have a marker so re-runs only add new ones.
   var processedIds = Object.create(null);
+
+  // ---- Polygon JSON parser ----------------------------------
+  // Accepts:
+  //   • {type:"FeatureCollection", features:[...]}      → first polygon feature
+  //   • {type:"Feature", geometry:{type:"Polygon"...}}  → its geometry
+  //   • {type:"Polygon", coordinates:[...]}             → as-is
+  //   • [[ [lng,lat], ... ]]                            → wrapped as Polygon
+  // Returns a Polygon geometry object or null.
+  function parsePolygon(raw) {
+    if (!raw || typeof raw !== "string") return null;
+    var s = raw.trim();
+    if (!s) return null;
+    var obj;
+    try { obj = JSON.parse(s); } catch (e) { return null; }
+    if (!obj) return null;
+    // Bare coordinates array
+    if (Array.isArray(obj)) {
+      // Could be a ring [[lng,lat],...] or rings [[[lng,lat],...]]
+      if (obj.length && Array.isArray(obj[0]) && typeof obj[0][0] === "number") {
+        return { type: "Polygon", coordinates: [obj] };
+      }
+      if (obj.length && Array.isArray(obj[0]) && Array.isArray(obj[0][0])) {
+        return { type: "Polygon", coordinates: obj };
+      }
+      return null;
+    }
+    if (obj.type === "FeatureCollection" && obj.features && obj.features.length) {
+      for (var i = 0; i < obj.features.length; i++) {
+        var g = obj.features[i].geometry;
+        if (g && (g.type === "Polygon" || g.type === "MultiPolygon")) return g;
+      }
+      return null;
+    }
+    if (obj.type === "Feature" && obj.geometry) {
+      if (obj.geometry.type === "Polygon" || obj.geometry.type === "MultiPolygon") return obj.geometry;
+      return null;
+    }
+    if (obj.type === "Polygon" || obj.type === "MultiPolygon") return obj;
+    return null;
+  }
+
+  // Centroid of a polygon's outer ring (simple average of vertices).
+  // Adequate for representative point at low zoom; ignores donut holes.
+  function polygonCentroid(geom) {
+    if (!geom) return null;
+    var ring = geom.type === "Polygon"
+      ? (geom.coordinates && geom.coordinates[0])
+      : (geom.coordinates && geom.coordinates[0] && geom.coordinates[0][0]);
+    if (!ring || !ring.length) return null;
+    var sx = 0, sy = 0, n = 0;
+    for (var i = 0; i < ring.length; i++) {
+      var p = ring[i];
+      if (i === ring.length - 1 && ring.length > 1
+          && p[0] === ring[0][0] && p[1] === ring[0][1]) continue; // dedupe closing point
+      sx += p[0]; sy += p[1]; n++;
+    }
+    return n ? [sx / n, sy / n] : null;
+  }
 
   function processList(listEl, source) {
     var items = listEl.querySelectorAll(".locations-map_item");
@@ -213,29 +280,65 @@ try { (function () {
       var latI = item.querySelector('input[id="locationLatitude"]');
       var lngI = item.querySelector('input[id="locationLongitude"]');
       var idI  = item.querySelector('input[id="locationID"]');
+      var typeI = item.querySelector('input[id="locationGeometryType"]');
+      var polyI = item.querySelector('input[id="locationPolygon"]');
       var card = item.querySelector(".locations-map_card");
-      if (!latI || !lngI) continue;
-      var lat = parseFloat(latI.value);
-      var lng = parseFloat(lngI.value);
+
+      var geomType = (typeI && typeI.value || "point").toLowerCase().trim();
+      var rawPoly = polyI && polyI.value || "";
+
+      // Try polygon parse first if requested; fall back to point on failure.
+      var polygonGeom = null;
+      if (geomType === "polygon" && rawPoly) {
+        polygonGeom = parsePolygon(rawPoly);
+      }
+
+      // Determine point coordinates (used both for centroid marker and
+      // as the only representation when geomType !== polygon).
+      var lat = latI ? parseFloat(latI.value) : NaN;
+      var lng = lngI ? parseFloat(lngI.value) : NaN;
+      if ((isNaN(lat) || isNaN(lng)) && polygonGeom) {
+        var c = polygonCentroid(polygonGeom);
+        if (c) { lng = c[0]; lat = c[1]; }
+      }
       if (isNaN(lat) || isNaN(lng)) continue;
+
       var locId = (idI && idI.value) ? idI.value : (source + "-" + i);
-      // Skip if a marker for this slug already exists (handles
-      // duplicate items across paginated wrappers and re-runs).
       if (processedIds[locId]) continue;
       processedIds[locId] = true;
-      // Stamp wrapper for stable lookup later.
       if (!item.getAttribute("data-loc-id")) {
         item.setAttribute("data-loc-id", locId);
       }
+
+      var description = card ? card.innerHTML : "";
+
+      // Always push a Point feature (used as centroid marker for
+      // polygons at low zoom, or as the sole representation for
+      // non-polygon items).
       mapLocations.features.push({
         type: "Feature",
         geometry: { type: "Point", coordinates: [lng, lat] },
         properties: {
           id: locId,
           source: source,
-          description: card ? card.innerHTML : ""
+          description: description,
+          isPolygonCentroid: !!polygonGeom
         }
       });
+
+      // If polygon was successfully parsed, also push polygon feature.
+      if (polygonGeom) {
+        mapPolygons.features.push({
+          type: "Feature",
+          geometry: polygonGeom,
+          properties: {
+            id: locId,
+            source: source,
+            description: description
+          }
+        });
+      }
+
       added++;
     }
     return added;
@@ -275,6 +378,8 @@ try { (function () {
   // Filtering by source replaces the source's data with the visible
   // subset, which re-clusters automatically.
   var SOURCE_ID = "rsp-points";
+  var POLY_SOURCE_ID = "rsp-polygons";
+  var POLYGON_MIN_ZOOM = 9; // Below this, only centroid markers show.
   var sourceAdded = false;
 
   function colourMatchExpr() {
@@ -355,7 +460,8 @@ try { (function () {
       }
     });
 
-    // Individual unclustered points
+    // Individual unclustered points. Polygon centroids fade to 0
+    // at POLYGON_MIN_ZOOM so the polygon owns the screen there.
     map.addLayer({
       id: "rsp-points",
       type: "circle",
@@ -371,9 +477,57 @@ try { (function () {
         ],
         "circle-stroke-width": 2,
         "circle-stroke-color": "#ffffff",
-        "circle-opacity": 0.95
+        "circle-opacity": [
+          "case",
+          ["all",
+            ["==", ["get", "isPolygonCentroid"], true],
+            [">=", ["zoom"], POLYGON_MIN_ZOOM]
+          ],
+          0,
+          0.95
+        ]
       }
     });
+
+    // ---- Polygon source + layers ----------------------------
+    map.addSource(POLY_SOURCE_ID, {
+      type: "geojson",
+      data: visiblePolygonCollection(),
+      promoteId: "id"
+    });
+
+    // Filled area, beneath the line. Hover state lifts opacity.
+    map.addLayer({
+      id: "rsp-polygons-fill",
+      type: "fill",
+      source: POLY_SOURCE_ID,
+      minzoom: POLYGON_MIN_ZOOM,
+      paint: {
+        "fill-color": colourMatchExpr(),
+        "fill-opacity": [
+          "case",
+          ["boolean", ["feature-state", "hover"], false], 0.45,
+          0.22
+        ]
+      }
+    }, "rsp-points");
+
+    // Outline.
+    map.addLayer({
+      id: "rsp-polygons-line",
+      type: "line",
+      source: POLY_SOURCE_ID,
+      minzoom: POLYGON_MIN_ZOOM,
+      paint: {
+        "line-color": colourMatchExpr(),
+        "line-width": [
+          "interpolate", ["linear"], ["zoom"],
+          POLYGON_MIN_ZOOM, 1.4,
+          14, 2.4
+        ],
+        "line-opacity": 0.95
+      }
+    }, "rsp-points");
 
       attachLayerHandlers();
       sourceAdded = true;
@@ -406,12 +560,24 @@ try { (function () {
     return { type: "FeatureCollection", features: out };
   }
 
-  // Push the latest visible features into the source. Mapbox
-  // re-clusters automatically.
+  function visiblePolygonCollection() {
+    var feats = mapPolygons.features;
+    var out = [];
+    for (var i = 0; i < feats.length; i++) {
+      var s = feats[i].properties.source;
+      if (visibility[s] !== false) out.push(feats[i]);
+    }
+    return { type: "FeatureCollection", features: out };
+  }
+
+  // Push the latest visible features into both sources. Mapbox
+  // re-clusters the points automatically; polygons just re-render.
   function syncSourceData() {
     if (!sourceAdded) return;
     var src = map.getSource(SOURCE_ID);
     if (src && src.setData) src.setData(visibleFeatureCollection());
+    var psrc = map.getSource(POLY_SOURCE_ID);
+    if (psrc && psrc.setData) psrc.setData(visiblePolygonCollection());
   }
 
   // Click + hover handlers on the rendered layers.
@@ -445,6 +611,40 @@ try { (function () {
     map.on("mouseleave", "rsp-clusters", function () { map.getCanvas().style.cursor = ""; });
     map.on("mouseenter", "rsp-points", function () { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "rsp-points", function () { map.getCanvas().style.cursor = ""; });
+
+    // ---- Polygon click + hover -----------------------------
+    var hoveredPolyId = null;
+
+    map.on("click", "rsp-polygons-fill", function (e) {
+      var f = e.features && e.features[0];
+      if (!f) return;
+      var locId = f.properties.id;
+      stopRotation();
+      // Center on polygon centroid for context.
+      var c = polygonCentroid(f.geometry);
+      if (c) map.flyTo({ center: c, zoom: Math.max(map.getZoom(), POLYGON_MIN_ZOOM + 1), speed: 0.7, curve: 1 });
+      openSidebarFor(locId);
+    });
+
+    map.on("mouseenter", "rsp-polygons-fill", function () { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "rsp-polygons-fill", function () {
+      map.getCanvas().style.cursor = "";
+      if (hoveredPolyId !== null) {
+        map.setFeatureState({ source: POLY_SOURCE_ID, id: hoveredPolyId }, { hover: false });
+        hoveredPolyId = null;
+      }
+    });
+    map.on("mousemove", "rsp-polygons-fill", function (e) {
+      var f = e.features && e.features[0];
+      if (!f) return;
+      if (hoveredPolyId !== null && hoveredPolyId !== f.id) {
+        map.setFeatureState({ source: POLY_SOURCE_ID, id: hoveredPolyId }, { hover: false });
+      }
+      hoveredPolyId = f.id;
+      if (hoveredPolyId !== null) {
+        map.setFeatureState({ source: POLY_SOURCE_ID, id: hoveredPolyId }, { hover: true });
+      }
+    });
   }
 
   // Convenience kept for compatibility with previous code paths.
@@ -735,7 +935,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.8.3",
+    version: "0.9.0",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -745,7 +945,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.8.3 boot path attached (cluster size capped). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.9.0 boot path attached (polygons enabled). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
