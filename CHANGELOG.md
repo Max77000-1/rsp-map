@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.5 — 2026-05-09
+
+### Added
+- **Geocoder (search box)**. Mapbox Geocoder plugin loaded dynamically (no Designer change). Country bias to `sy,lb,jo,iq,tr`. Locale-aware placeholder ("ابحث عن مكان..." in Arabic, "Search a place..." in English). Mounted in top-right (LTR) or top-left (RTL).
+
+## v1.0.4 — 2026-05-09
+
+### Added
+- **Slug-pattern source detection** as a third fallback in `detectSourceFromList()`. Items lacking Visit Profile links and without `data-rsp-source` on the wrapper now get classified by majority slug match: `(^|-)project($|-|s)` → projects, `(^|-)tender($|-|s)` → tenders. Auto-rescues lists Maher hadn't fully wired yet.
+
+## v1.0.3 — 2026-05-08
+
+### Fixed
+- **Boot race**: the loader script injects `<script defer>` dynamically into `<head>`, but the `defer` attribute set on a dynamically-created script is ignored — the script runs as soon as it loads, possibly BEFORE `<div id="map">` exists in DOM. Symptom: `__rsp_err = "NO_MAP_CONTAINER"`. Fix: top-level guard waits for `DOMContentLoaded` (or polls for #map every 80 ms up to 8 s) before booting.
+
 ## v1.0.2 — 2026-05-08
 
 ### Fixed
