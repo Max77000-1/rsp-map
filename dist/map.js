@@ -298,8 +298,14 @@ try { (function () {
       type: "geojson",
       data: visibleFeatureCollection(),
       cluster: true,
-      clusterMaxZoom: 14,
-      clusterRadius: 50
+      // Below this zoom, points cluster. Above, every point is
+      // shown individually. Higher = clusters persist when
+      // zoomed in. Lower = points break apart sooner.
+      clusterMaxZoom: 12,
+      // Pixel radius within which points join a cluster. Lower
+      // value = fewer points clumped together, more clusters
+      // overall, smaller in size.
+      clusterRadius: 38
     });
 
     // Cluster circles
@@ -315,12 +321,15 @@ try { (function () {
           10, "#2E5077", // 10-49
           50, "#D4A14D"  // 50+
         ],
+        // Visual size of the cluster bubble. Capped at 26 so
+        // very dense clusters do not visually dominate the
+        // surrounding terrain.
         "circle-radius": [
           "step", ["get", "point_count"],
-          16,
-          10, 22,
-          50, 30,
-          200, 38
+          14,
+          10, 18,
+          50, 22,
+          200, 26
         ],
         "circle-stroke-width": 3,
         "circle-stroke-color": "#ffffff",
@@ -726,7 +735,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.8.2",
+    version: "0.8.3",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -736,7 +745,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.8.2 boot path attached (clustering, no renderedIds). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.8.3 boot path attached (cluster size capped). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
