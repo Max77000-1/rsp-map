@@ -1,9 +1,11 @@
 // ============================================================
-// RSP Map — v0.6.1
+// RSP Map — v0.6.2
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
-// marker↔sidebar binding via slug.
+// marker↔sidebar binding via slug. Defensive boot path for the
+// case where the Mapbox `load` event already fired before our
+// listener attached. Diagnostic surface on window.__rsp.
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -438,10 +440,42 @@
   }
 
   // ---- Boot -------------------------------------------------
-  map.on("load", function () {
+  function boot() {
     waitForFirstItemsThen(function () {
-      renderNow();
-      startContinuousRender();
+      try {
+        renderNow();
+        startContinuousRender();
+      } catch (err) {
+        console.error("[RSP] renderNow failed:", err && err.stack || err);
+      }
     });
-  });
+  }
+
+  // Defensive: if map.loaded() is already true, the "load" event has
+  // fired and a fresh listener won't run.
+  if (map.loaded && map.loaded()) {
+    console.log("[RSP] map already loaded; booting immediately");
+    boot();
+  } else {
+    map.on("load", function () {
+      console.log("[RSP] map load event fired");
+      boot();
+    });
+  }
+
+  // Expose a small diagnostic surface for live debugging without
+  // breaking encapsulation. Read-only consumers expected.
+  window.__rsp = {
+    version: "0.6.2",
+    map: map,
+    config: cfg,
+    sources: SOURCES,
+    features: function () { return mapLocations.features.slice(); },
+    rendered: function () { return Object.keys(renderedIds).length; },
+    processed: function () { return Object.keys(processedIds).length; },
+    rerender: function () { renderNow(); },
+    visibility: function () { return Object.assign({}, visibility); }
+  };
+  console.log("[RSP] map.js v0.6.2 boot path attached. mapboxgl ready, items in DOM:",
+    document.querySelectorAll(".locations-map_item").length);
 })();
