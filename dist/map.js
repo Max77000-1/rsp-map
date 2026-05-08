@@ -1,11 +1,14 @@
 // ============================================================
-// RSP Map — v0.6.2
+// RSP Map — v0.6.3
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
 // marker↔sidebar binding via slug. Defensive boot path for the
 // case where the Mapbox `load` event already fired before our
 // listener attached. Diagnostic surface on window.__rsp.
+//
+// v0.6.3: top-level try/catch surfaces any boot-time error to
+// window.__rsp_err so silent failures become visible.
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -19,12 +22,26 @@
 //   waitMaxMs      — max ms to wait for Finsweet completion (default: 8000)
 // ============================================================
 
-(function () {
+window.__rsp_err = null;
+window.__rsp_loaded_at = Date.now();
+try { (function () {
   "use strict";
 
   var cfg = window.RSP_MAP_CONFIG || {};
   if (!cfg.mapboxToken) {
+    window.__rsp_err = "MISSING_TOKEN";
     console.error("[RSP] window.RSP_MAP_CONFIG.mapboxToken is missing.");
+    return;
+  }
+  if (typeof mapboxgl === "undefined" || !mapboxgl.Map) {
+    window.__rsp_err = "MAPBOX_NOT_LOADED";
+    console.error("[RSP] mapboxgl is not available.");
+    return;
+  }
+  var containerEl = document.getElementById("map");
+  if (!containerEl) {
+    window.__rsp_err = "NO_MAP_CONTAINER";
+    console.error("[RSP] #map container not found.");
     return;
   }
 
@@ -466,7 +483,7 @@
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.6.2",
+    version: "0.6.3",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -476,6 +493,10 @@
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.6.2 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.6.3 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
+} catch (e) {
+  window.__rsp_err = { message: e && e.message, stack: e && e.stack };
+  console.error("[RSP] Boot threw:", e && e.stack || e);
+}
