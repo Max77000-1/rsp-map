@@ -50,7 +50,13 @@
 
 window.__rsp_err = null;
 window.__rsp_loaded_at = Date.now();
-try { (function () {
+
+// The loader injects this script dynamically into <head>. When the
+// DOM hasn't finished parsing yet, the dynamically-added script
+// executes before <div id="map"> exists. Defer until the DOM is
+// ready (and #map present) before booting.
+function __rsp_main() {
+  try { (function () {
   "use strict";
 
   var cfg = window.RSP_MAP_CONFIG || {};
@@ -1152,7 +1158,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.2",
+    version: "1.0.3",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1162,10 +1168,29 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.2 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.3 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
-})();
-} catch (e) {
-  window.__rsp_err = { message: e && e.message, stack: e && e.stack };
-  console.error("[RSP] Boot threw:", e && e.stack || e);
+  })();
+  } catch (e) {
+    window.__rsp_err = { message: e && e.message, stack: e && e.stack };
+    console.error("[RSP] Boot threw:", e && e.stack || e);
+  }
+}
+
+// Boot when DOM is ready. Loader injects this script dynamically,
+// so default `defer` semantics don't apply.
+if (document.getElementById("map")) {
+  __rsp_main();
+} else if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", __rsp_main);
+} else {
+  // DOM is interactive/complete but #map still not there — wait
+  // for it to appear (small Webflow render delay sometimes).
+  var __rsp_poll = setInterval(function () {
+    if (document.getElementById("map")) {
+      clearInterval(__rsp_poll);
+      __rsp_main();
+    }
+  }, 80);
+  setTimeout(function () { clearInterval(__rsp_poll); }, 8000);
 }
