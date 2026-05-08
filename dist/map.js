@@ -1,9 +1,16 @@
 // ============================================================
-// RSP Map — v0.7.4
+// RSP Map — v0.8.0
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
-// Load awareness with continuous late-arrival handling, stable
-// marker↔sidebar binding via slug.
+// Load awareness, stable marker↔sidebar binding via slug.
+//
+// Phase 1: native Mapbox GeoJSON source with clustering.
+// Replaces DOM-based mapboxgl.Marker objects with three
+// layers: cluster circles, cluster count labels, and
+// individual coloured points. Click on cluster → zoom in.
+// Click on individual point → open sidebar by slug.
+// Filters re-render the source data, which re-clusters
+// automatically.
 //
 // v0.7.0:
 //  - Markers rendered as colored dots using brand palette per
@@ -117,13 +124,16 @@ try { (function () {
   var defaultStyle = styleUrl;
   var satelliteStyle = "mapbox://styles/mapbox/satellite-v9";
 
+  // After any style change (including initial load and satellite
+  // toggle), Mapbox wipes user-added sources/layers. Re-add them.
   map.on("style.load", function () {
-    if (markersInitialized) addAllMarkers();
+    sourceAdded = false;
+    setupSourceAndLayers();
+    syncSourceData();
   });
 
   function toggleMapMode() {
     isSatellite = !isSatellite;
-    clearAllMarkers();
     map.setStyle(isSatellite ? satelliteStyle : defaultStyle);
   }
   jq("#mapmode").on("click", toggleMapMode);
@@ -256,95 +266,164 @@ try { (function () {
     return encounters;
   }
 
-  // ---- Markers ----------------------------------------------
-  var markersInitialized = false;
+  // ---- Mapbox source + cluster layers -----------------------
+  // Uses a single GeoJSON source (`rsp-points`) for all features,
+  // with cluster:true. Three layers stacked:
+  //   • clusters         — coloured circle showing aggregated count
+  //   • cluster-count    — number rendered inside the cluster
+  //   • unclustered-point — single point, coloured by source
+  // Filtering by source replaces the source's data with the visible
+  // subset, which re-clusters automatically.
+  var SOURCE_ID = "rsp-points";
+  var sourceAdded = false;
 
-  function clearAllMarkers() {
-    for (var s in markerGroups) {
-      var arr = markerGroups[s];
-      for (var i = 0; i < arr.length; i++) arr[i].remove();
+  function colourMatchExpr() {
+    // Mapbox `match` expression: source name → colour.
+    var expr = ["match", ["get", "source"]];
+    Object.keys(SOURCES).forEach(function (s) {
+      expr.push(s, SOURCES[s].color);
+    });
+    expr.push(SOURCES.companies.color); // default fallback
+    return expr;
+  }
+
+  function setupSourceAndLayers() {
+    if (!map.isStyleLoaded()) return false;
+    if (map.getSource(SOURCE_ID)) { sourceAdded = true; return true; }
+
+    map.addSource(SOURCE_ID, {
+      type: "geojson",
+      data: visibleFeatureCollection(),
+      cluster: true,
+      clusterMaxZoom: 14,
+      clusterRadius: 50
+    });
+
+    // Cluster circles
+    map.addLayer({
+      id: "rsp-clusters",
+      type: "circle",
+      source: SOURCE_ID,
+      filter: ["has", "point_count"],
+      paint: {
+        "circle-color": [
+          "step", ["get", "point_count"],
+          "#4DA1A9",   // 2-9
+          10, "#2E5077", // 10-49
+          50, "#D4A14D"  // 50+
+        ],
+        "circle-radius": [
+          "step", ["get", "point_count"],
+          16,
+          10, 22,
+          50, 30,
+          200, 38
+        ],
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#ffffff",
+        "circle-opacity": 0.92
+      }
+    });
+
+    // Cluster count labels
+    map.addLayer({
+      id: "rsp-cluster-count",
+      type: "symbol",
+      source: SOURCE_ID,
+      filter: ["has", "point_count"],
+      layout: {
+        "text-field": ["get", "point_count_abbreviated"],
+        "text-size": 13,
+        "text-allow-overlap": true
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "rgba(0,0,0,0.25)",
+        "text-halo-width": 1
+      }
+    });
+
+    // Individual unclustered points
+    map.addLayer({
+      id: "rsp-points",
+      type: "circle",
+      source: SOURCE_ID,
+      filter: ["!", ["has", "point_count"]],
+      paint: {
+        "circle-color": colourMatchExpr(),
+        "circle-radius": [
+          "interpolate", ["linear"], ["zoom"],
+          5, 5,
+          10, 7,
+          15, 10
+        ],
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ffffff",
+        "circle-opacity": 0.95
+      }
+    });
+
+    attachLayerHandlers();
+    sourceAdded = true;
+    return true;
+  }
+
+  // Build a FeatureCollection containing only currently-visible sources.
+  function visibleFeatureCollection() {
+    var feats = mapLocations.features;
+    var out = [];
+    for (var i = 0; i < feats.length; i++) {
+      var s = feats[i].properties.source;
+      if (visibility[s] !== false) out.push(feats[i]);
     }
-    markerGroups = {};
-    renderedIds = Object.create(null);
+    return { type: "FeatureCollection", features: out };
   }
 
-  function makeMarkerEl(source) {
-    // Mapbox sets `transform: translate(...)` on the outer marker
-    // element to position it. Touching transform on hover would
-    // override that and warp the marker to (0,0). To get a hover
-    // effect without losing position we wrap a child element and
-    // animate that, plus animate box-shadow on the parent.
-    var el = document.createElement("div");
-    el.className = "custom-marker custom-marker--" + source;
-    var color = (SOURCES[source] && SOURCES[source].color) || "#4DA1A9";
-    el.style.cssText =
-      "width:14px;height:14px;cursor:pointer;" +
-      "transition:box-shadow 0.18s ease;" +
-      "border-radius:50%;";
-
-    var dot = document.createElement("div");
-    dot.style.cssText =
-      "width:100%;height:100%;border-radius:50%;" +
-      "background:" + color + ";" +
-      "border:2px solid #ffffff;" +
-      "box-shadow:0 0 0 1px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.25);" +
-      "transition:transform 0.18s ease;" +
-      "transform-origin:center;";
-    el.appendChild(dot);
-
-    el.addEventListener("mouseenter", function () {
-      dot.style.transform = "scale(1.45)";
-      el.style.boxShadow = "0 0 0 6px " + color + "33";
-      el.style.borderRadius = "50%";
-    });
-    el.addEventListener("mouseleave", function () {
-      dot.style.transform = "scale(1)";
-      el.style.boxShadow = "none";
-    });
-    return el;
+  // Push the latest visible features into the source. Mapbox
+  // re-clusters automatically.
+  function syncSourceData() {
+    if (!sourceAdded) return;
+    var src = map.getSource(SOURCE_ID);
+    if (src && src.setData) src.setData(visibleFeatureCollection());
   }
 
-  // Track which feature ids already have a Mapbox marker (separate
-  // from processedIds so style toggles can rebuild without re-parsing).
-  var renderedIds = Object.create(null);
+  // Click + hover handlers on the rendered layers.
+  function attachLayerHandlers() {
+    // Click on cluster: zoom in.
+    map.on("click", "rsp-clusters", function (e) {
+      var features = map.queryRenderedFeatures(e.point, { layers: ["rsp-clusters"] });
+      if (!features.length) return;
+      var clusterId = features[0].properties.cluster_id;
+      var src = map.getSource(SOURCE_ID);
+      src.getClusterExpansionZoom(clusterId, function (err, zoom) {
+        if (err) return;
+        stopRotation();
+        map.easeTo({ center: features[0].geometry.coordinates, zoom: zoom });
+      });
+    });
 
-  function addAllMarkers() {
-    // Render only features that don't yet have a marker. Existing markers
-    // remain in place. Style toggles call clearAllMarkers() first which
-    // resets renderedIds so a full rebuild happens cleanly.
-    var newCount = 0;
-    for (var i = 0; i < mapLocations.features.length; i++) {
-      var f = mapLocations.features[i];
+    // Click on single point: fly + open sidebar.
+    map.on("click", "rsp-points", function (e) {
+      var f = e.features && e.features[0];
+      if (!f) return;
+      var coords = f.geometry.coordinates.slice();
       var locId = f.properties.id;
-      if (renderedIds[locId]) continue;
-      renderedIds[locId] = true;
+      stopRotation();
+      map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 12), speed: 0.7, curve: 1 });
+      openSidebarFor(locId);
+    });
 
-      var coords = f.geometry.coordinates;
-      var src = f.properties.source;
-      var description = f.properties.description;
-
-      var el = makeMarkerEl(src);
-      var popup = new mapboxgl.Popup({ offset: 25 }).setHTML(description);
-      var marker = new mapboxgl.Marker(el).setLngLat(coords).setPopup(popup).addTo(map);
-
-      if (!markerGroups[src]) markerGroups[src] = [];
-      markerGroups[src].push(marker);
-
-      if (visibility[src] === false) el.style.display = "none";
-
-      (function (coords, locId) {
-        el.addEventListener("click", function () {
-          stopRotation();
-          map.flyTo({ center: coords, zoom: map.getZoom(), speed: 0.5, curve: 1 });
-          openSidebarFor(locId);
-        });
-      })(coords, locId);
-
-      newCount++;
-    }
-    markersInitialized = true;
-    if (newCount > 0) console.log("[RSP] Added " + newCount + " markers; total now " + Object.keys(renderedIds).length);
+    // Cursor styling
+    map.on("mouseenter", "rsp-clusters", function () { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "rsp-clusters", function () { map.getCanvas().style.cursor = ""; });
+    map.on("mouseenter", "rsp-points", function () { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "rsp-points", function () { map.getCanvas().style.cursor = ""; });
   }
+
+  // Convenience kept for compatibility with previous code paths.
+  function addAllMarkers() { syncSourceData(); }
+  function clearAllMarkers() { /* no-op now: layers persist across renders */ }
+  var markersInitialized = true;
 
   // ---- Sidebar binding (stable id-based) --------------------
   function openSidebarFor(locId) {
@@ -384,10 +463,7 @@ try { (function () {
 
   function toggleSource(src) {
     visibility[src] = !visibility[src];
-    var arr = markerGroups[src] || [];
-    for (var i = 0; i < arr.length; i++) {
-      arr[i].getElement().style.display = visibility[src] ? "block" : "none";
-    }
+    syncSourceData(); // re-render with the visible subset, re-clusters
     var idx = sourceOrder.indexOf(src);
     if (idx >= 0) {
       var raw = document.getElementById((idx + 1) + "cms");
@@ -458,13 +534,12 @@ try { (function () {
 
   function renderNow() {
     var encounters = discoverAndProcess();
-    // Build/extend sourceOrder by DOM-position encounter, deduplicated.
     encounters.forEach(function (e) {
       if (e.source && sourceOrder.indexOf(e.source) < 0) sourceOrder.push(e.source);
     });
-    addAllMarkers();
-    // Re-run on every render so late-arriving sources from
-    // Finsweet's paginated batches get their buttons wired too.
+    // Make sure source/layers exist (depends on style being loaded).
+    if (!sourceAdded) setupSourceAndLayers();
+    syncSourceData();
     bindFilterButtons();
     if (!initialRenderDone) {
       hidePreloader();
@@ -631,7 +706,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.7.4",
+    version: "0.8.0",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -641,7 +716,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.7.4 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.8.0 boot path attached (clustering). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
