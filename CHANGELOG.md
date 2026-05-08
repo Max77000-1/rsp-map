@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.1 — 2026-05-08
+
+### Fixed
+- **Late-arriving Finsweet items were never rendered.** v0.6.0 ran a single discovery pass after a fixed 8s timeout; if Finsweet was still streaming pages past that window (typical with 200+ companies), 100+ markers would be dropped.
+- **Duplicate items across paginated wrappers were not de-duped.** Some Webflow setups produce repeated `location-list5` containers; v0.6.0 created two markers for the same slug.
+
+### Changed
+- Two-phase render pipeline:
+  1. **First render** as soon as any items appear in the DOM (no arbitrary wait).
+  2. **Continuous render** via a long-lived MutationObserver: every new batch of items from Finsweet triggers a debounced (400ms) re-discovery and adds only previously-unseen markers. The observer self-stops after 30s of DOM idle.
+- `processedIds` and `renderedIds` registers prevent duplicate markers across re-runs and across duplicate list IDs.
+- `waitMaxMs` raised to 15s (only used as a safety net; render now starts as soon as items are present).
+
 ## v0.6.0 — 2026-05-08
 
 ### Added

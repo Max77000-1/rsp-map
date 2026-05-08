@@ -1,8 +1,9 @@
 // ============================================================
-// RSP Map — v0.6.0
+// RSP Map — v0.6.1
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
-// Load awareness, stable marker↔sidebar binding via slug.
+// Load awareness with continuous late-arrival handling, stable
+// marker↔sidebar binding via slug.
 //
 // Configuration (set on the host Webflow page in <head>):
 //   <script>
@@ -138,6 +139,9 @@
     mapLocations = { type: "FeatureCollection", features: [] };
   }
 
+  // Track which slugs already have a marker so re-runs only add new ones.
+  var processedIds = Object.create(null);
+
   function processList(listEl, source) {
     var items = listEl.querySelectorAll(".locations-map_item");
     var added = 0;
@@ -152,6 +156,10 @@
       var lng = parseFloat(lngI.value);
       if (isNaN(lat) || isNaN(lng)) continue;
       var locId = (idI && idI.value) ? idI.value : (source + "-" + i);
+      // Skip if a marker for this slug already exists (handles
+      // duplicate items across paginated wrappers and re-runs).
+      if (processedIds[locId]) continue;
+      processedIds[locId] = true;
       // Stamp wrapper for stable lookup later.
       if (!item.getAttribute("data-loc-id")) {
         item.setAttribute("data-loc-id", locId);
@@ -200,6 +208,7 @@
       for (var i = 0; i < arr.length; i++) arr[i].remove();
     }
     markerGroups = {};
+    renderedIds = Object.create(null);
   }
 
   function makeMarkerEl(source) {
@@ -212,13 +221,23 @@
     return el;
   }
 
+  // Track which feature ids already have a Mapbox marker (separate
+  // from processedIds so style toggles can rebuild without re-parsing).
+  var renderedIds = Object.create(null);
+
   function addAllMarkers() {
-    clearAllMarkers();
+    // Render only features that don't yet have a marker. Existing markers
+    // remain in place. Style toggles call clearAllMarkers() first which
+    // resets renderedIds so a full rebuild happens cleanly.
+    var newCount = 0;
     for (var i = 0; i < mapLocations.features.length; i++) {
       var f = mapLocations.features[i];
+      var locId = f.properties.id;
+      if (renderedIds[locId]) continue;
+      renderedIds[locId] = true;
+
       var coords = f.geometry.coordinates;
       var src = f.properties.source;
-      var locId = f.properties.id;
       var description = f.properties.description;
 
       var el = makeMarkerEl(src);
@@ -228,7 +247,6 @@
       if (!markerGroups[src]) markerGroups[src] = [];
       markerGroups[src].push(marker);
 
-      // Hide if currently filtered off
       if (visibility[src] === false) el.style.display = "none";
 
       (function (coords, locId) {
@@ -238,8 +256,11 @@
           openSidebarFor(locId);
         });
       })(coords, locId);
+
+      newCount++;
     }
     markersInitialized = true;
+    if (newCount > 0) console.log("[RSP] Added " + newCount + " markers; total now " + Object.keys(renderedIds).length);
   }
 
   // ---- Sidebar binding (stable id-based) --------------------
@@ -321,59 +342,106 @@
   // Hide sidebar on load
   jq(".locations-map_wrapper").removeClass("is--show");
 
-  // ---- Finsweet List Load awareness -------------------------
-  // V2 emits no documented public event yet, so we use a
-  // MutationObserver with debounce: when the count of
-  // .locations-map_item stops changing for 600ms, consider load done.
-  function waitForFinsweetThen(callback) {
-    var maxWait = cfg.waitMaxMs || 8000;
-    var debounceMs = 600;
-    var startedAt = Date.now();
-    var lastCount = -1;
-    var lastChangeAt = Date.now();
-    var done = false;
+  // ---- Render pipeline --------------------------------------
+  // Two-phase strategy:
+  //  1) Initial render once any items have arrived (fast feedback for
+  //     the user; ~300-800ms typically once Finsweet's first batch
+  //     appears).
+  //  2) Continuous render: a long-lived MutationObserver re-discovers
+  //     and renders any items that arrive afterwards. This handles
+  //     Finsweet's late paginated batches without losing markers.
+  //
+  // Both phases share `processedIds` and `renderedIds` so duplicates
+  // are skipped automatically.
 
+  var initialRenderDone = false;
+
+  function renderNow() {
+    var report = discoverAndProcess();
+    var newSources = Object.keys(report)
+      .map(function (k) { return report[k].source; })
+      .filter(function (s) { return s; });
+    // Maintain sourceOrder in encounter order, de-duplicated.
+    newSources.forEach(function (s) {
+      if (sourceOrder.indexOf(s) < 0) sourceOrder.push(s);
+    });
+    addAllMarkers();
+    if (!initialRenderDone) {
+      bindFilterButtons();
+      initialRenderDone = true;
+    }
+  }
+
+  // Settles a flurry of mutations into a single render call.
+  function debounce(fn, ms) {
+    var t = null;
+    return function () {
+      if (t) clearTimeout(t);
+      t = setTimeout(fn, ms);
+    };
+  }
+
+  function startContinuousRender() {
+    var schedule = debounce(renderNow, 400);
+    var lastTotalSeen = 0;
+    var observer = new MutationObserver(function () {
+      var n = document.querySelectorAll(".locations-map_item").length;
+      if (n !== lastTotalSeen) {
+        lastTotalSeen = n;
+        schedule();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    // Safety stop: if no DOM activity for 30s, disconnect the observer.
+    var idleSince = Date.now();
+    var idleTimer = setInterval(function () {
+      var n = document.querySelectorAll(".locations-map_item").length;
+      if (n === lastTotalSeen) {
+        if (Date.now() - idleSince > 30000) {
+          observer.disconnect();
+          clearInterval(idleTimer);
+          console.log("[RSP] Continuous renderer stopped after idle. Final marker count:",
+            Object.keys(renderedIds).length);
+        }
+      } else {
+        idleSince = Date.now();
+        lastTotalSeen = n;
+      }
+    }, 5000);
+  }
+
+  // First render fires as soon as any items exist (typically right after
+  // Finsweet's first batch lands). We don't wait for an arbitrary
+  // timeout: the continuous observer will keep adding markers as more
+  // items arrive.
+  function waitForFirstItemsThen(callback) {
+    var maxWait = cfg.waitMaxMs || 15000;
+    var startedAt = Date.now();
+    var done = false;
     function finish(reason) {
       if (done) return;
       done = true;
       observer.disconnect();
-      console.log("[RSP] Finsweet wait done (" + reason + "). Items in DOM:",
+      clearInterval(poll);
+      console.log("[RSP] First-items wait done (" + reason + "). Items in DOM:",
         document.querySelectorAll(".locations-map_item").length);
       callback();
     }
-
     var observer = new MutationObserver(function () {
-      var n = document.querySelectorAll(".locations-map_item").length;
-      if (n !== lastCount) {
-        lastCount = n;
-        lastChangeAt = Date.now();
-      }
+      if (document.querySelectorAll(".locations-map_item").length > 0) finish("first-items");
     });
     observer.observe(document.body, { childList: true, subtree: true });
-
     var poll = setInterval(function () {
-      var now = Date.now();
-      if (now - lastChangeAt > debounceMs && lastCount > 0) {
-        clearInterval(poll);
-        finish("stable");
-      } else if (now - startedAt > maxWait) {
-        clearInterval(poll);
-        finish("timeout");
-      }
+      if (document.querySelectorAll(".locations-map_item").length > 0) finish("present");
+      else if (Date.now() - startedAt > maxWait) finish("timeout");
     }, 200);
   }
 
   // ---- Boot -------------------------------------------------
   map.on("load", function () {
-    waitForFinsweetThen(function () {
-      var report = discoverAndProcess();
-      sourceOrder = Object.keys(report)
-        .map(function (k) { return report[k].source; })
-        .filter(function (s) { return s; });
-      // De-dup while preserving order (companies may appear in 2 lists)
-      sourceOrder = sourceOrder.filter(function (s, i, a) { return a.indexOf(s) === i; });
-      addAllMarkers();
-      bindFilterButtons();
+    waitForFirstItemsThen(function () {
+      renderNow();
+      startContinuousRender();
     });
   });
 })();
