@@ -1,5 +1,5 @@
 // ============================================================
-// RSP Map — v0.7.0
+// RSP Map — v0.7.1
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
@@ -316,15 +316,19 @@ try { (function () {
   function bindFilterButtons() {
     sourceOrder.forEach(function (src, idx) {
       if (boundButtons[src]) return;
-      var btnId = "#" + (idx + 1) + "cms";
-      var $btn = jq(btnId);
-      var raw = document.querySelector(btnId);
-      if (raw) {
-        raw.setAttribute("data-rsp-src", src);
-        raw.setAttribute("title", (SOURCES[src] && SOURCES[src].label) || src);
+      var rawId = (idx + 1) + "cms"; // id like "1cms" — NOT valid as CSS selector
+      var raw = document.getElementById(rawId);
+      if (!raw) return; // button not present in this page
+      raw.setAttribute("data-rsp-src", src);
+      raw.setAttribute("title", (SOURCES[src] && SOURCES[src].label) || src);
+      // Click via jQuery (works with digit-leading IDs); fall back to vanilla.
+      var $btn = jq("#" + rawId);
+      if ($btn && $btn.on) {
+        $btn.on("click", function () { toggleSource(src); });
+      } else {
+        raw.addEventListener("click", function () { toggleSource(src); });
       }
-      $btn.on("click", function () { toggleSource(src); });
-      $btn.addClass("is--active");
+      raw.classList.add("is--active");
       boundButtons[src] = true;
     });
   }
@@ -337,8 +341,11 @@ try { (function () {
     }
     var idx = sourceOrder.indexOf(src);
     if (idx >= 0) {
-      var btn = jq("#" + (idx + 1) + "cms");
-      if (visibility[src]) btn.addClass("is--active"); else btn.removeClass("is--active");
+      var raw = document.getElementById((idx + 1) + "cms");
+      if (raw) {
+        if (visibility[src]) raw.classList.add("is--active");
+        else raw.classList.remove("is--active");
+      }
     }
   }
 
@@ -424,7 +431,7 @@ try { (function () {
   // Hide the "Next" random-marker button (#Next).
   function hideNextButton() {
     var btn = document.getElementById("Next");
-    if (btn) btn.style.display = "none";
+    if (btn) btn.style.setProperty("display", "none", "important");
   }
 
   // Inject a stylesheet that:
@@ -571,7 +578,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.7.0",
+    version: "0.7.1",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -581,7 +588,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.7.0 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.7.1 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
