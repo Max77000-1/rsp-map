@@ -1,5 +1,5 @@
 // ============================================================
-// RSP Map — v0.7.3
+// RSP Map — v0.7.4
 // ------------------------------------------------------------
 // Multi-source auto-discovery (8 collections), Finsweet V2 List
 // Load awareness with continuous late-arrival handling, stable
@@ -269,20 +269,38 @@ try { (function () {
   }
 
   function makeMarkerEl(source) {
+    // Mapbox sets `transform: translate(...)` on the outer marker
+    // element to position it. Touching transform on hover would
+    // override that and warp the marker to (0,0). To get a hover
+    // effect without losing position we wrap a child element and
+    // animate that, plus animate box-shadow on the parent.
     var el = document.createElement("div");
     el.className = "custom-marker custom-marker--" + source;
     var color = (SOURCES[source] && SOURCES[source].color) || "#4DA1A9";
-    // Solid colored dot with subtle white ring + soft outer glow.
-    // No icon image. Sized to read clearly at country zoom and
-    // not crowd at city zoom.
     el.style.cssText =
-      "width:14px;height:14px;border-radius:50%;cursor:pointer;" +
+      "width:14px;height:14px;cursor:pointer;" +
+      "transition:box-shadow 0.18s ease;" +
+      "border-radius:50%;";
+
+    var dot = document.createElement("div");
+    dot.style.cssText =
+      "width:100%;height:100%;border-radius:50%;" +
       "background:" + color + ";" +
       "border:2px solid #ffffff;" +
       "box-shadow:0 0 0 1px rgba(0,0,0,0.15), 0 1px 4px rgba(0,0,0,0.25);" +
-      "transition:transform 0.15s ease;";
-    el.addEventListener("mouseenter", function () { el.style.transform = "scale(1.35)"; });
-    el.addEventListener("mouseleave", function () { el.style.transform = "scale(1)"; });
+      "transition:transform 0.18s ease;" +
+      "transform-origin:center;";
+    el.appendChild(dot);
+
+    el.addEventListener("mouseenter", function () {
+      dot.style.transform = "scale(1.45)";
+      el.style.boxShadow = "0 0 0 6px " + color + "33";
+      el.style.borderRadius = "50%";
+    });
+    el.addEventListener("mouseleave", function () {
+      dot.style.transform = "scale(1)";
+      el.style.boxShadow = "none";
+    });
     return el;
   }
 
@@ -498,8 +516,15 @@ try { (function () {
       );
     });
 
-    // Marker hover label
+    // Marker hover lift on z-index
     css.push(".custom-marker:hover{z-index:10;}");
+
+    // Hide Webflow's native pagination controls inside the
+    // collection lists. Finsweet List Load handles pagination
+    // automatically; the visible "Next" / "Previous" / page
+    // count UI is required for Finsweet to detect pagination
+    // but should not be shown to end users.
+    css.push(".w-dyn-list .w-pagination-wrapper,.w-dyn-list .w-pagination-next,.w-dyn-list .w-pagination-previous,.w-dyn-list .w-page-count{display:none !important;}");
 
     var styleEl = document.createElement("style");
     styleEl.setAttribute("data-rsp", "map-styles");
@@ -606,7 +631,7 @@ try { (function () {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "0.7.3",
+    version: "0.7.4",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -616,7 +641,7 @@ try { (function () {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v0.7.3 boot path attached. mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v0.7.4 boot path attached. mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
 })();
 } catch (e) {
