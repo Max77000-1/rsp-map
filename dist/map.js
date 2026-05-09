@@ -363,9 +363,19 @@ function __rsp_main() {
       var heightM = rawHeight ? parseFloat(rawHeight) : NaN;
       if (isNaN(heightM) || heightM <= 0) heightM = 0;
 
-      // Try polygon parse first if requested; fall back to point on failure.
+      // Try to parse the polygon. We are lenient here:
+      //   • If `geometry-type` is "polygon" or "model" → expect polygon.
+      //   • If `geometry-type` is empty / a Webflow option-id hash
+      //     and a non-empty polygon-geojson exists, still try to
+      //     parse — content presence is a strong signal that this
+      //     item is meant as a polygon, regardless of how Webflow
+      //     happens to render the option field.
       var polygonGeom = null;
-      if (geomType === "polygon" && rawPoly) {
+      var wantsPolygon =
+        geomType === "polygon" ||
+        geomType === "model" ||
+        (rawPoly && rawPoly.length > 20); // any non-trivial JSON
+      if (wantsPolygon && rawPoly) {
         polygonGeom = parsePolygon(rawPoly);
       }
 
@@ -481,13 +491,12 @@ function __rsp_main() {
       data: visibleFeatureCollection(),
       cluster: true,
       // Below this zoom, points cluster. Above, every point is
-      // shown individually. Higher = clusters persist when
-      // zoomed in. Lower = points break apart sooner.
-      clusterMaxZoom: 12,
+      // shown individually. Lower = points break apart sooner.
+      clusterMaxZoom: 11,
       // Pixel radius within which points join a cluster. Lower
       // value = fewer points clumped together, more clusters
-      // overall, smaller in size.
-      clusterRadius: 38
+      // overall, smaller in size. 25 keeps each cluster <~50.
+      clusterRadius: 25
     });
 
     // Cluster circles
@@ -821,6 +830,46 @@ function __rsp_main() {
     document.head.appendChild(s);
   }
 
+  // Local geocoder: searches the items currently on the map by
+  // their slug or by their human-readable name extracted from
+  // the sidebar card. Returns top matches as Mapbox-Geocoder
+  // result objects so they appear above remote suggestions.
+  function localGeocoder(query) {
+    var q = (query || "").trim().toLowerCase();
+    if (q.length < 2) return [];
+    var results = [];
+    var seen = {};
+    var feats = mapLocations.features;
+    for (var i = 0; i < feats.length && results.length < 5; i++) {
+      var f = feats[i];
+      var locId = f.properties.id || "";
+      // Try to extract a name from the matching sidebar item.
+      var slug = locId.toLowerCase();
+      var name = locId.replace(/-/g, " ");
+      var sidebar = document.querySelector('.locations-map_item[data-loc-id="' + (window.CSS && CSS.escape ? CSS.escape(locId) : locId) + '"]');
+      if (sidebar) {
+        var heading = sidebar.querySelector(".card_heading, h2, h3, .text-block");
+        if (heading && heading.textContent.trim()) {
+          name = heading.textContent.trim().slice(0, 80);
+        }
+      }
+      var hay = (slug + " " + name).toLowerCase();
+      if (hay.indexOf(q) === -1) continue;
+      if (seen[locId]) continue;
+      seen[locId] = true;
+      results.push({
+        type: "Feature",
+        place_name: name + "  ·  " + (sourceLabel(f.properties.source) || ""),
+        place_type: ["rsp"],
+        properties: { rsp_id: locId },
+        text: name,
+        center: f.geometry.coordinates,
+        geometry: f.geometry
+      });
+    }
+    return results;
+  }
+
   function mountGeocoder() {
     if (geocoderMounted) return;
     if (typeof MapboxGeocoder === "undefined") return;
@@ -828,22 +877,30 @@ function __rsp_main() {
       var geocoder = new MapboxGeocoder({
         accessToken: cfg.mapboxToken,
         mapboxgl: mapboxgl,
-        placeholder: LOCALE === "ar" ? "ابحث عن مكان..." : "Search a place...",
+        placeholder: LOCALE === "ar" ? "ابحث (نقاط أو أماكن)..." : "Search (markers or places)...",
         countries: "sy,lb,jo,iq,tr",
         language: LOCALE,
         marker: false,
-        zoom: 12,
-        flyTo: { speed: 1.5, curve: 1 }
+        zoom: 13,
+        flyTo: { speed: 1.5, curve: 1 },
+        localGeocoder: localGeocoder
+      });
+      // When the user picks a local result, also open the sidebar.
+      geocoder.on("result", function (e) {
+        var rspId = e.result && e.result.properties && e.result.properties.rsp_id;
+        if (rspId) {
+          openSidebarFor(rspId);
+        }
       });
       map.addControl(geocoder, LOCALE === "ar" ? "top-left" : "top-right");
-      // RTL adjustment: nudge geocoder a touch into the canvas.
       var box = document.querySelector(".mapboxgl-ctrl-geocoder");
       if (box) {
         box.style.maxWidth = "320px";
         box.style.minWidth = "240px";
+        if (window.innerWidth < 768) box.style.maxWidth = "calc(100vw - 24px)";
       }
       geocoderMounted = true;
-      console.log("[RSP] Geocoder mounted");
+      console.log("[RSP] Geocoder mounted (with local marker search)");
     } catch (e) {
       console.warn("[RSP] Geocoder mount failed:", e && e.message);
     }
@@ -1054,15 +1111,23 @@ function __rsp_main() {
   function buildLegend() {
     if (document.getElementById("rsp-legend")) return;
     var rtl = LOCALE === "ar";
+    var isMobile = window.innerWidth < 768;
     var box = document.createElement("div");
     box.id = "rsp-legend";
     box.dir = rtl ? "rtl" : "ltr";
     box.style.cssText =
-      "position:absolute;bottom:18px;" + (rtl ? "left" : "right") + ":18px;" +
+      "position:absolute;" +
+      // On mobile, anchor to the top corner to avoid overlapping
+      // the bottom controls. On desktop, sit at the bottom.
+      (isMobile
+        ? "top:78px;" + (rtl ? "left" : "right") + ":12px;"
+        : "bottom:18px;" + (rtl ? "left" : "right") + ":18px;") +
       "background:rgba(255,255,255,0.96);backdrop-filter:blur(6px);" +
       "border-radius:12px;padding:10px 14px;font-family:inherit;" +
       "box-shadow:0 4px 14px rgba(0,0,0,0.18);z-index:10;" +
-      "min-width:160px;max-width:240px;font-size:13px;color:#1a2329;";
+      "min-width:" + (isMobile ? "120px" : "160px") + ";" +
+      "max-width:" + (isMobile ? "180px" : "240px") + ";" +
+      "font-size:" + (isMobile ? "12px" : "13px") + ";color:#1a2329;";
     var head = document.createElement("div");
     head.style.cssText = "display:flex;justify-content:space-between;align-items:center;cursor:pointer;font-weight:600;margin-bottom:8px;color:#2E5077;";
     head.innerHTML = "<span>" + t("legendTitle") + "</span><span style='font-size:11px;color:#888;font-weight:400' id='rsp-legend-toggle'>" + t("legendHide") + "</span>";
@@ -1085,6 +1150,12 @@ function __rsp_main() {
       body.style.display = hidden ? "" : "none";
       document.getElementById("rsp-legend-toggle").textContent = hidden ? t("legendHide") : t("legendShow");
     });
+
+    // Auto-collapse on mobile so it doesn't dominate the viewport.
+    if (isMobile) {
+      body.style.display = "none";
+      document.getElementById("rsp-legend-toggle").textContent = t("legendShow");
+    }
 
     // Mount inside the map container so it sits over the canvas.
     var host = document.getElementById("map");
@@ -1248,7 +1319,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.5",
+    version: "1.0.6",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1258,7 +1329,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.5 boot path attached (geocoder). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.6 boot path attached (mobile + local search + tighter clusters). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
