@@ -81,7 +81,7 @@ function __rsp_main() {
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
     "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#4DA1A9", iconKey: "companies" },
-    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#3A6EA5", iconKey: "projects" },
+    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#9B5DE5", iconKey: "projects" },
     "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
     "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
@@ -1040,6 +1040,9 @@ function __rsp_main() {
       injectMapStyles();
       // Legend removed in v1.0.8 — source names already visible inside the filter buttons.
       // buildLegend();
+      // Belt-and-suspenders: forcibly remove any legend left behind by a cached older build.
+      var __oldLegend = document.getElementById("rsp-legend");
+      if (__oldLegend && __oldLegend.parentNode) __oldLegend.parentNode.removeChild(__oldLegend);
       loadGeocoder();
       restoreFromUrl();
       initialRenderDone = true;
@@ -1331,7 +1334,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.8",
+    version: "1.0.9",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1341,7 +1344,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.8 boot path attached (legend removed, projects color brightened, dot has white ring). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.9 boot path attached (projects purple, legend force-removed). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

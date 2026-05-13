@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.9 — 2026-05-13
+
+### Changed
+- **Projects color** changed from `#3A6EA5` (blue) to `#9B5DE5` (vivid purple). Even the brighter blue blended with the navy button background. Purple is distinct from every other source and clearly visible on any background.
+
+### Fixed
+- **Stale legend leftover removed on boot.** If a cached older build had already attached the `#rsp-legend` element to the DOM, the new build now removes it explicitly. Prevents the legend reappearing for users still on a stale CDN copy during the rollover window.
+
 ## v1.0.8 — 2026-05-13
 
 ### Removed
