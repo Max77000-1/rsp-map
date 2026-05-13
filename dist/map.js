@@ -81,7 +81,7 @@ function __rsp_main() {
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
     "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#4DA1A9", iconKey: "companies" },
-    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#2E5077", iconKey: "projects" },
+    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#3A6EA5", iconKey: "projects" },
     "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
     "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
@@ -1038,7 +1038,8 @@ function __rsp_main() {
       hidePreloader();
       hideNextButton();
       injectMapStyles();
-      buildLegend();
+      // Legend removed in v1.0.8 — source names already visible inside the filter buttons.
+      // buildLegend();
       loadGeocoder();
       restoreFromUrl();
       initialRenderDone = true;
@@ -1203,11 +1204,14 @@ function __rsp_main() {
         "}"
       );
       // Coloured dot indicator next to the button (small bottom strip).
+      // White ring around the dot so dark source colors (e.g. navy for
+      // projects) stay visible against dark button backgrounds.
       css.push(
         "[data-rsp-src=\"" + src + "\"]{position:relative;}" +
         "[data-rsp-src=\"" + src + "\"]::after{" +
-          "content:\"\";position:absolute;left:50%;bottom:-6px;transform:translateX(-50%);" +
-          "width:6px;height:6px;border-radius:50%;background:" + c + ";" +
+          "content:\"\";position:absolute;left:50%;bottom:-7px;transform:translateX(-50%);" +
+          "width:8px;height:8px;border-radius:50%;background:" + c + ";" +
+          "box-shadow:0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.18);" +
         "}"
       );
     });
@@ -1327,7 +1331,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.7",
+    version: "1.0.8",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1337,7 +1341,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.7 boot path attached (orgs source hidden until ready). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.8 boot path attached (legend removed, projects color brightened, dot has white ring). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

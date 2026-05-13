@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.8 — 2026-05-13
+
+### Removed
+- **Floating legend** ("Categories" panel). Filter buttons already display their source name and icon, so the legend was redundant. Code retained behind a commented call for fast restoration if needed.
+
+### Changed
+- **Projects color brightened** from `#2E5077` (brand navy) to `#3A6EA5` (richer blue). The original navy blended with the dark navy button background, leaving the projects filter visually unmarked.
+- **Filter dot indicator** now has a white ring + soft outer shadow so every source color stays visible against any button background. Increased size from 6 px to 8 px.
+
 ## v1.0.7 — 2026-05-13
 
 ### Changed
