@@ -1229,6 +1229,10 @@ function __rsp_main() {
     // but should not be shown to end users.
     css.push(".w-dyn-list .w-pagination-wrapper,.w-dyn-list .w-pagination-next,.w-dyn-list .w-pagination-previous,.w-dyn-list .w-page-count{display:none !important;}");
 
+    // Hide the "Powered by Mapbox" link inside the Geocoder results panel.
+    // The main map still carries the required Mapbox attribution control.
+    css.push(".mapboxgl-ctrl-geocoder--powered-by{display:none !important;}");
+
     var styleEl = document.createElement("style");
     styleEl.setAttribute("data-rsp", "map-styles");
     styleEl.textContent = css.join("\n");
@@ -1334,7 +1338,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.9",
+    version: "1.0.10",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1344,7 +1348,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.9 boot path attached (projects purple, legend force-removed). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.10 boot path attached (geocoder Powered-by hidden). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.10 — 2026-05-13
+
+### Changed
+- **Hide "Powered by Mapbox" link** inside the Geocoder results panel via CSS (`.mapboxgl-ctrl-geocoder--powered-by`). The main map still renders the required Mapbox attribution control, satisfying Mapbox terms.
+
 ## v1.0.9 — 2026-05-13
 
 ### Changed
