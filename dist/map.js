@@ -87,7 +87,7 @@ function __rsp_main() {
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
     "locations":                   { ar: "مواقع جغرافية",  en: "Locations",            color: "#8698AC", iconKey: "locations" },
     "blog":                        { ar: "مدوّنة وأخبار",  en: "News & Blog",          color: "#99C5CB", iconKey: "blog" },
-    "organization-and-initiative": { ar: "منظمات ومبادرات", en: "Orgs. & Initiatives", color: "#5FBF7C", iconKey: "orgs" }
+    "organization-and-initiative": { ar: "منظمات ومبادرات", en: "Orgs. & Initiatives", color: "#5FBF7C", iconKey: "orgs", hidden: true }
   };
 
   // Active locale: "ar" or "en". Detect from <html lang> or URL.
@@ -930,6 +930,13 @@ function __rsp_main() {
       var rawId = (idx + 1) + "cms"; // id like "1cms" — NOT valid as CSS selector
       var raw = document.getElementById(rawId);
       if (!raw) return; // button not present in this page
+      // Hide buttons for sources flagged not-yet-public (e.g., orgs)
+      if (SOURCES[src] && SOURCES[src].hidden) {
+        raw.style.display = "none";
+        visibility[src] = false; // also force-hide on the map
+        boundButtons[src] = true;
+        return;
+      }
       raw.setAttribute("data-rsp-src", src);
       raw.setAttribute("title", sourceLabel(src));
       // Click via jQuery (works with digit-leading IDs); fall back to vanilla.
@@ -1136,6 +1143,7 @@ function __rsp_main() {
     body.id = "rsp-legend-body";
     Object.keys(SOURCES).forEach(function (src) {
       var meta = SOURCES[src];
+      if (meta.hidden) return; // skip sources flagged as not-yet-public
       var row = document.createElement("div");
       row.style.cssText = "display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px;";
       row.innerHTML =
@@ -1319,7 +1327,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.6",
+    version: "1.0.7",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1329,7 +1337,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.6 boot path attached (mobile + local search + tighter clusters). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.7 boot path attached (orgs source hidden until ready). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

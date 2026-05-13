@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.7 — 2026-05-13
+
+### Changed
+- **Orgs source hidden from UI until the collection is ready.** Added `hidden: true` flag on `organization-and-initiative` in the `SOURCES` registry. The legend skips its row, the filter button (if present in DOM) is set to `display: none`, and `visibility` is forced to `false` so any stray items never render. To re-enable later: remove the `hidden: true` flag — that's the only change required.
+
 ## v1.0.5 — 2026-05-09
 
 ### Added
