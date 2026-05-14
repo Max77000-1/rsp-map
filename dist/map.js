@@ -214,15 +214,24 @@ function __rsp_main() {
     }
 
     // 2) Examine first items' first matching href.
+    // On the Arabic locale every href is prefixed with "/ar/", so we
+    // walk through the path segments and pick the first one that is a
+    // known SOURCES key instead of blindly taking segment [0].
     var items = listEl.querySelectorAll(".locations-map_item");
     var counts = {};
     for (var i = 0; i < Math.min(items.length, 6); i++) {
       var hrefs = items[i].querySelectorAll('a[href^="/"]');
       for (var j = 0; j < hrefs.length; j++) {
-        var path = hrefs[j].getAttribute("href").split("/").filter(Boolean)[0];
-        if (!path) continue;
-        if (Object.prototype.hasOwnProperty.call(SOURCES, path)) {
-          counts[path] = (counts[path] || 0) + 1;
+        var segments = hrefs[j].getAttribute("href").split("/").filter(Boolean);
+        var match = null;
+        for (var s = 0; s < segments.length; s++) {
+          if (Object.prototype.hasOwnProperty.call(SOURCES, segments[s])) {
+            match = segments[s];
+            break;
+          }
+        }
+        if (match) {
+          counts[match] = (counts[match] || 0) + 1;
           break;
         }
       }
@@ -1338,7 +1347,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.10",
+    version: "1.0.11",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1348,7 +1357,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.10 boot path attached (geocoder Powered-by hidden). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.11 boot path attached (AR locale href detection fixed). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

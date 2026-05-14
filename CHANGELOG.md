@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.11 — 2026-05-14
+
+### Fixed
+- **Arabic locale: filter buttons unresponsive.** On `/ar/the-map-v2` all internal links are prefixed with `/ar/` (e.g. `/ar/companies/<slug>`). The href-based source detector was reading segment `[0]` after splitting by `/`, getting `"ar"` (not a SOURCES key), so every list returned `null` for its source. With `sourceOrder` empty, no filter button got wired and no source was rendered. Now scans all path segments and picks the first one that matches a known SOURCES key.
+
 ## v1.0.10 — 2026-05-13
 
 ### Changed
