@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.15 — 2026-05-14
+
+### Fixed
+- **Arabic sidebar card never appeared.** The Webflow project carries a CSS rule `.locations-map_wrapper:lang(ar){display:none}` that hides the entire info-card wrapper in the Arabic locale, and the wrapper also resolved to `width:0` there. Confirmed live: clicking any marker in Arabic flew the map and updated the URL but showed no card. Injected an override (`display:block !important; width:20em !important` on the wrapper, plus `width:20em` on the shown item) so the Arabic card renders identically to English (verified 320×442). The Designer rule can also be removed manually; this override is defensive against that drift.
+
 ## v1.0.14 — 2026-05-14
 
 ### Fixed

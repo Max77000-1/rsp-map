@@ -1294,6 +1294,15 @@ function __rsp_main() {
       ".cms_button:not(.is--active),[id$=\"cms\"]:not(.is--active){opacity:0.45;filter:grayscale(0.6);transition:opacity 0.2s,filter 0.2s,box-shadow 0.2s;}",
       ".cms_button.is--active,[id$=\"cms\"].is--active{opacity:1;filter:none;}",
 
+      // Arabic sidebar fix. The Webflow project carries a rule
+      // `.locations-map_wrapper:lang(ar){display:none}` that hides
+      // the info card entirely in the Arabic locale, and the card
+      // also resolves to width:0 there. Force the wrapper visible
+      // and 20em wide so Arabic matches English. (Maher can also
+      // delete that Designer rule; this override is defensive.)
+      ".locations-map_wrapper:lang(ar){display:block !important;width:20em !important;}",
+      ".locations-map_wrapper:lang(ar) .locations-map_item.is--show{width:20em !important;}",
+
       // Active state coloured ring per source. Border + soft glow.
       // Uses data-rsp-src to be order-independent.
     ];
@@ -1483,7 +1492,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.14",
+    version: "1.0.15",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1493,7 +1502,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.14 boot path attached (control buttons delegated, projects card width fixed, load indicator, orgs visible). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.15 boot path attached (AR sidebar display:none override). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
