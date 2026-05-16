@@ -87,7 +87,7 @@ function __rsp_main() {
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
     "locations":                   { ar: "مواقع جغرافية",  en: "Locations",            color: "#8698AC", iconKey: "locations" },
     "blog":                        { ar: "مدوّنة وأخبار",  en: "News & Blog",          color: "#99C5CB", iconKey: "blog" },
-    "organization-and-initiative": { ar: "منظمات ومبادرات", en: "Orgs. & Initiatives", color: "#5FBF7C", iconKey: "orgs", hidden: true }
+    "organization-and-initiative": { ar: "منظمات ومبادرات", en: "Orgs. & Initiatives", color: "#5FBF7C", iconKey: "orgs" }
   };
 
   // Active locale: "ar" or "en". Detect from <html lang> or URL.
@@ -146,6 +146,12 @@ function __rsp_main() {
 
   var originalSettings = { center: initialCenter, zoom: initialZoom, pitch: 0, bearing: 0 };
 
+  // Show the in-map loading pill immediately; syncSourceData
+  // hides it once real markers land. Safety timeout drops it
+  // after 30s so it can never get stuck on a hard failure.
+  showMapLoader();
+  setTimeout(hideMapLoader, 30000);
+
   // ---- Rotation control -------------------------------------
   var rotating = false, rotationInterval = null;
   function startRotation() {
@@ -177,7 +183,10 @@ function __rsp_main() {
     isSatellite = !isSatellite;
     map.setStyle(isSatellite ? satelliteStyle : defaultStyle);
   }
-  jq("#mapmode").on("click", toggleMapMode);
+  // #mapmode click is wired later via document-level event
+  // delegation (same robust pattern as the other map controls).
+  // A direct jq("#mapmode").on(...) here would double-fire in
+  // locales where the element exists at boot.
 
   // ---- jQuery shim (page already loads jQuery, but be safe) -
   function jq(sel) {
@@ -732,9 +741,12 @@ function __rsp_main() {
   function syncSourceData() {
     if (!sourceAdded) return;
     var src = map.getSource(SOURCE_ID);
-    if (src && src.setData) src.setData(visibleFeatureCollection());
+    var fc = visibleFeatureCollection();
+    if (src && src.setData) src.setData(fc);
     var psrc = map.getSource(POLY_SOURCE_ID);
     if (psrc && psrc.setData) psrc.setData(visiblePolygonCollection());
+    // First time real markers reach the map, drop the loader pill.
+    if (fc && fc.features && fc.features.length > 0) hideMapLoader();
   }
 
   // Click + hover handlers on the rendered layers.
@@ -917,13 +929,28 @@ function __rsp_main() {
   }
 
   // ---- Sidebar binding (stable id-based) --------------------
+  // The visible state is driven entirely by `is--show` on the
+  // `.locations-map_item`. (The wrapper's own styling class is
+  // the confusingly-named `is---hidden`, three dashes, which is
+  // always present; adding `is--show` to the wrapper is a no-op
+  // but kept for backward compatibility.)
+  //
+  // Robustness: a slug can appear on more than one DOM node when
+  // Finsweet keeps paginated copies. querySelector returns the
+  // first, which may be an unrendered 0x0 copy — that produced
+  // an empty card in Arabic. We therefore show EVERY node that
+  // matches the slug; only the rendered one has size.
   function openSidebarFor(locId) {
     jq(".locations-map_wrapper").addClass("is--show");
-    jq(".locations-map_item").removeClass("is--show");
+    var allItems = document.querySelectorAll(".locations-map_item");
+    for (var i = 0; i < allItems.length; i++) allItems[i].classList.remove("is--show");
     var safe = (window.CSS && CSS.escape) ? CSS.escape(locId) : locId.replace(/"/g, '\\"');
-    var target = document.querySelector('.locations-map_item[data-loc-id="' + safe + '"]');
-    if (target) target.classList.add("is--show");
-    else console.warn("[RSP] No sidebar item for id:", locId);
+    var matches = document.querySelectorAll('.locations-map_item[data-loc-id="' + safe + '"]');
+    if (!matches.length) {
+      console.warn("[RSP] No sidebar item for id:", locId);
+    } else {
+      for (var m = 0; m < matches.length; m++) matches[m].classList.add("is--show");
+    }
     // Reflect in URL so the link can be shared.
     if (typeof writeUrlState === "function") writeUrlState({ id: locId });
   }
@@ -998,24 +1025,27 @@ function __rsp_main() {
     }
   }, true);
 
-  jq("#RestMap").on("click", function () {
+  // Map control buttons (Home / Satellite / Zoom / Next).
+  // Bound via event delegation on document — the previous
+  // one-shot jq("#id").on(...) bindings missed entirely in the
+  // Arabic locale because the buttons were not yet in the DOM
+  // at boot time. Delegation is immune to timing and to Webflow
+  // re-rendering the elements.
+  function actionHome() {
     stopRotation();
     map.flyTo({
       center: originalSettings.center, zoom: originalSettings.zoom,
       pitch: originalSettings.pitch, bearing: originalSettings.bearing,
       speed: 2.5, curve: 1
     });
-    jq(".locations-map_wrapper").removeClass("is--show");
-    jq(".locations-map_item").removeClass("is--show");
-  });
-
-  jq("#Zoom").on("click", function () {
+    closeSidebar();
+  }
+  function actionZoom() {
     stopRotation();
     map.flyTo({ zoom: 17, pitch: 60, speed: 1.5, curve: 1 });
     map.once("moveend", startRotation);
-  });
-
-  jq("#Next").on("click", function () {
+  }
+  function actionNext() {
     var visible = mapLocations.features.filter(function (f) {
       return visibility[f.properties.source];
     });
@@ -1031,10 +1061,52 @@ function __rsp_main() {
     });
     map.once("moveend", startRotation);
     openSidebarFor(pick.properties.id);
-  });
+  }
+  // #mapmode (satellite toggle) is wired here too so all four
+  // control buttons follow the same robust pattern.
+  document.addEventListener("click", function (ev) {
+    var el = ev.target;
+    while (el && el !== document) {
+      var id = el.id;
+      if (id === "RestMap") { actionHome(); return; }
+      if (id === "mapmode") { ev.preventDefault(); toggleMapMode(); return; }
+      if (id === "Zoom")    { actionZoom(); return; }
+      if (id === "Next")    { actionNext(); return; }
+      el = el.parentNode;
+    }
+  }, true);
 
-  // Hide sidebar on load
-  jq(".locations-map_wrapper").removeClass("is--show");
+  // Hide sidebar on load — run now and again shortly after, in
+  // case the Webflow wrapper ships with `is--show` and jQuery /
+  // the DOM was not ready on the first attempt.
+  function forceHideSidebarOnce() {
+    var wrap = document.querySelectorAll(".locations-map_wrapper");
+    for (var i = 0; i < wrap.length; i++) wrap[i].classList.remove("is--show");
+    var items = document.querySelectorAll(".locations-map_item.is--show");
+    for (var j = 0; j < items.length; j++) items[j].classList.remove("is--show");
+  }
+  forceHideSidebarOnce();
+  setTimeout(forceHideSidebarOnce, 600);
+  setTimeout(forceHideSidebarOnce, 1800);
+
+  // The sidebar card width comes from the (confusingly named)
+  // `is---hidden` class on `.locations-map_wrapper`, which sets
+  // `width: 20em`. The PROJECTS collection wrapper was published
+  // without that class, so every projects card collapsed to 0x0
+  // (empty card, unclickable close button) in both locales.
+  // Guarantee the class on every wrapper so all 8 collections
+  // render their cards identically, regardless of Designer state.
+  function ensureSidebarWrapperClass() {
+    var wrap = document.querySelectorAll(".locations-map_wrapper");
+    for (var i = 0; i < wrap.length; i++) {
+      if (!wrap[i].classList.contains("is---hidden")) {
+        wrap[i].classList.add("is---hidden");
+      }
+    }
+  }
+  ensureSidebarWrapperClass();
+  setTimeout(ensureSidebarWrapperClass, 600);
+  setTimeout(ensureSidebarWrapperClass, 1800);
 
   // ---- Render pipeline --------------------------------------
   // Two-phase strategy:
@@ -1278,6 +1350,52 @@ function __rsp_main() {
     setTimeout(function () { pre.style.display = "none"; }, 500);
   }
 
+  // ---- In-map loading indicator -----------------------------
+  // The Mapbox style + cluster layers can take 10-18s to become
+  // ready on a cold load. The Webflow preloader hides as soon as
+  // the DOM items are discovered, which leaves the user staring
+  // at an empty map. This small pill stays until the cluster
+  // source actually has features, then fades out.
+  var mapLoaderHidden = false;
+  function showMapLoader() {
+    if (document.getElementById("rsp-map-loading")) return;
+    var host = document.getElementById("map");
+    if (!host) return;
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    var pill = document.createElement("div");
+    pill.id = "rsp-map-loading";
+    pill.setAttribute("dir", LOCALE === "ar" ? "rtl" : "ltr");
+    pill.innerHTML =
+      '<span class="rsp-ml-spin"></span>' +
+      '<span>' + (LOCALE === "ar" ? "جارٍ تحميل المواقع..." : "Loading locations...") + '</span>';
+    pill.style.cssText =
+      "position:absolute;top:18px;left:50%;transform:translateX(-50%);" +
+      "z-index:30;display:flex;align-items:center;gap:8px;" +
+      "background:rgba(46,80,119,0.92);color:#fff;font-size:13px;" +
+      "font-family:inherit;padding:8px 14px;border-radius:999px;" +
+      "box-shadow:0 4px 14px rgba(0,0,0,0.25);pointer-events:none;" +
+      "transition:opacity 0.4s;";
+    if (!document.getElementById("rsp-map-loading-css")) {
+      var st = document.createElement("style");
+      st.id = "rsp-map-loading-css";
+      st.textContent =
+        ".rsp-ml-spin{width:13px;height:13px;border-radius:50%;" +
+        "border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;" +
+        "display:inline-block;animation:rsp-ml-rot 0.7s linear infinite;}" +
+        "@keyframes rsp-ml-rot{to{transform:rotate(360deg);}}";
+      document.head.appendChild(st);
+    }
+    host.appendChild(pill);
+  }
+  function hideMapLoader() {
+    if (mapLoaderHidden) return;
+    mapLoaderHidden = true;
+    var pill = document.getElementById("rsp-map-loading");
+    if (!pill) return;
+    pill.style.opacity = "0";
+    setTimeout(function () { if (pill.parentNode) pill.parentNode.removeChild(pill); }, 450);
+  }
+
   // Settles a flurry of mutations into a single render call.
   function debounce(fn, ms) {
     var t = null;
@@ -1365,7 +1483,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.13",
+    version: "1.0.14",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1375,7 +1493,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.13 boot path attached (close-card delegation covers id=closeWindow). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.14 boot path attached (control buttons delegated, projects card width fixed, load indicator, orgs visible). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

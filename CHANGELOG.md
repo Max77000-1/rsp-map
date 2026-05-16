@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.14 — 2026-05-14
+
+### Fixed
+- **Home & Satellite buttons dead in Arabic.** `#RestMap` and `#mapmode` were bound once at boot via `jq("#id").on(...)`; in the Arabic locale the elements were not in the DOM at that instant, so nothing bound. All four map controls (`#RestMap`, `#mapmode`, `#Zoom`, `#Next`) now use document-level event delegation, immune to timing and Webflow re-renders. The direct `#mapmode` binding was removed to avoid a double-fire in locales where it did bind.
+- **Projects cards collapsed to 0×0 (empty card, unclickable close).** The projects collection's `.locations-map_wrapper` was published without the `is---hidden` class that supplies `width: 20em`; its width was 0, so every projects card had no size. `ensureSidebarWrapperClass()` now adds the class to any wrapper missing it, at boot and twice after, so all 8 collections render cards identically.
+- **Sidebar card opening by itself on load.** `forceHideSidebarOnce()` now clears the shown state at boot and again at 600 ms and 1800 ms, covering the race where jQuery/DOM were not ready on the first attempt.
+- **`openSidebarFor` robustness.** Shows every DOM node matching the slug (not just the first), guarding against unrendered Finsweet duplicates.
+
+### Added
+- **In-map loading indicator.** A small pill ("Loading locations..." / "جارٍ تحميل المواقع...") shows immediately and fades only when real markers reach the map, replacing the 10-18 s blank-map window on cold load. Safety timeout removes it after 30 s.
+
+### Changed
+- **Organizations & initiatives source is now visible** (the `hidden` flag was removed) and binds to the new 8th filter button (`8cms`).
+
 ## v1.0.13 — 2026-05-14
 
 ### Fixed
