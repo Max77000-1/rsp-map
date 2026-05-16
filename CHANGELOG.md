@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.13 — 2026-05-14
+
+### Fixed
+- **Close-card button not working for projects & locations.** The handler bound only to the `.close-block` class. The projects and locations collection templates give their close button only `id="closeWindow"` (no class), so it was never bound. Replaced with a delegated `document` click listener that matches either `.close-block` or `id="closeWindow"`, and also covers cards injected later by Finsweet.
+
 ## v1.0.12 — 2026-05-14
 
 ### Changed

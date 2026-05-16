@@ -975,11 +975,28 @@ function __rsp_main() {
   }
 
   // ---- Misc UI bindings -------------------------------------
-  jq(".close-block").on("click", function () {
+  // Close-card handling via event delegation on document.
+  // Some collection templates (projects, locations) give the
+  // close button only `id="closeWindow"` and omit the
+  // `.close-block` class, so a class-only binding missed them.
+  // Delegation also covers cards injected later by Finsweet.
+  function closeSidebar() {
     jq(".locations-map_wrapper").removeClass("is--show");
+    jq(".locations-map_item").removeClass("is--show");
     stopRotation();
     if (typeof writeUrlState === "function") writeUrlState({ id: null });
-  });
+  }
+  document.addEventListener("click", function (ev) {
+    var el = ev.target;
+    while (el && el !== document) {
+      if ((el.classList && el.classList.contains("close-block")) ||
+          el.id === "closeWindow") {
+        closeSidebar();
+        return;
+      }
+      el = el.parentNode;
+    }
+  }, true);
 
   jq("#RestMap").on("click", function () {
     stopRotation();
@@ -1348,7 +1365,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.12",
+    version: "1.0.13",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1358,7 +1375,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.12 boot path attached (search box pinned top-right both locales). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.13 boot path attached (close-card delegation covers id=closeWindow). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
