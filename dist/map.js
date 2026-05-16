@@ -901,7 +901,8 @@ function __rsp_main() {
           openSidebarFor(rspId);
         }
       });
-      map.addControl(geocoder, LOCALE === "ar" ? "top-left" : "top-right");
+      // Search box stays in the top-right corner in both locales.
+      map.addControl(geocoder, "top-right");
       var box = document.querySelector(".mapboxgl-ctrl-geocoder");
       if (box) {
         box.style.maxWidth = "320px";
@@ -1347,7 +1348,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.11",
+    version: "1.0.12",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1357,7 +1358,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.11 boot path attached (AR locale href detection fixed). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.12 boot path attached (search box pinned top-right both locales). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

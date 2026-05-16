@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.12 — 2026-05-14
+
+### Changed
+- **Search box pinned to top-right in both locales.** Previously it mounted top-left under RTL (Arabic). Now `top-right` regardless of locale, per request.
+
 ## v1.0.11 — 2026-05-14
 
 ### Fixed
