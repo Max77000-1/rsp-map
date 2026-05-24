@@ -175,6 +175,11 @@ function __rsp_main() {
   // toggle), Mapbox wipes user-added sources/layers. Re-add them.
   map.on("style.load", function () {
     sourceAdded = false;
+    // Custom 3D model layers are also wiped — clear the cache so
+    // syncModelLayers re-adds them on top of the fresh style.
+    if (typeof modelLayerIds !== "undefined") {
+      for (var k in modelLayerIds) delete modelLayerIds[k];
+    }
     setupSourceAndLayers();
     syncSourceData();
   });
@@ -373,7 +378,9 @@ function __rsp_main() {
       var typeI = item.querySelector('input[id="locationGeometryType"]');
       var polyI = item.querySelector('input[id="locationPolygon"]');
       var heightI = item.querySelector('input[id="locationModelHeight"]');
+      var modelUrlI = item.querySelector('input[id="locationModelUrl"]');
       var card = item.querySelector(".locations-map_card");
+      var modelUrl = modelUrlI && modelUrlI.value ? modelUrlI.value.trim() : "";
 
       var geomType = (typeI && typeI.value || "point").toLowerCase().trim();
       var rawPoly = polyI && polyI.value || "";
@@ -426,7 +433,10 @@ function __rsp_main() {
           id: locId,
           source: source,
           description: description,
-          isPolygonCentroid: !!polygonGeom
+          isPolygonCentroid: !!polygonGeom,
+          modelUrl: (geomType === "model" && modelUrl) ? modelUrl : "",
+          modelLng: lng,
+          modelLat: lat
         }
       });
 
@@ -747,6 +757,107 @@ function __rsp_main() {
     if (psrc && psrc.setData) psrc.setData(visiblePolygonCollection());
     // First time real markers reach the map, drop the loader pill.
     if (fc && fc.features && fc.features.length > 0) hideMapLoader();
+    // Phase 5: attach glTF 3D models for items flagged with a model URL.
+    syncModelLayers();
+  }
+
+  // ---- Phase 5: 3D glTF model layers ------------------------
+  // Each item with geometry-type=model AND a non-empty
+  // locationModelUrl gets its own Mapbox custom layer rendering
+  // the .glb at the item's lng/lat. Three.js + GLTFLoader are
+  // loaded on demand from jsDelivr the first time a model is
+  // requested, so pages without any model item pay no cost.
+  var modelLayerIds = Object.create(null); // locId -> layerId
+  var threeReady = null; // Promise<void>
+  function ensureThree() {
+    if (threeReady) return threeReady;
+    threeReady = new Promise(function (resolve) {
+      function loadGLTFLoader() {
+        if (window.THREE && window.THREE.GLTFLoader) { resolve(); return; }
+        var s2 = document.createElement("script");
+        s2.src = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js";
+        s2.onload = function () { resolve(); };
+        document.head.appendChild(s2);
+      }
+      if (window.THREE) { loadGLTFLoader(); return; }
+      var s1 = document.createElement("script");
+      s1.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
+      s1.onload = loadGLTFLoader;
+      document.head.appendChild(s1);
+    });
+    return threeReady;
+  }
+  function syncModelLayers() {
+    var feats = mapLocations.features;
+    for (var i = 0; i < feats.length; i++) {
+      var p = feats[i].properties;
+      if (!p.modelUrl) continue;
+      if (modelLayerIds[p.id]) continue; // already added
+      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl);
+      modelLayerIds[p.id] = "rsp-model-" + p.id;
+    }
+  }
+  function addModelLayer(locId, lng, lat, modelUrl) {
+    ensureThree().then(function () {
+      if (!window.THREE || !window.THREE.GLTFLoader) {
+        console.warn("[RSP] THREE / GLTFLoader unavailable.");
+        return;
+      }
+      var modelOrigin = [lng, lat];
+      var modelAltitude = 0;
+      var modelAsMC = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, modelAltitude);
+      var modelTransform = {
+        translateX: modelAsMC.x,
+        translateY: modelAsMC.y,
+        translateZ: modelAsMC.z,
+        rotateX: Math.PI / 2,
+        rotateY: 0,
+        rotateZ: 0,
+        // glTF in meters; convert to Mercator units at this latitude.
+        scale: modelAsMC.meterInMercatorCoordinateUnits()
+      };
+      var layerId = "rsp-model-" + locId;
+      var customLayer = {
+        id: layerId,
+        type: "custom",
+        renderingMode: "3d",
+        onAdd: function (map, gl) {
+          this.camera = new THREE.Camera();
+          this.scene = new THREE.Scene();
+          var l1 = new THREE.DirectionalLight(0xffffff); l1.position.set(0, -70, 100).normalize(); this.scene.add(l1);
+          var l2 = new THREE.DirectionalLight(0xffffff); l2.position.set(0,  70, 100).normalize(); this.scene.add(l2);
+          this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+          this.map = map;
+          var self = this;
+          var loader = new THREE.GLTFLoader();
+          loader.load(modelUrl, function (gltf) {
+            self.scene.add(gltf.scene);
+          }, undefined, function (err) {
+            console.warn("[RSP] Failed to load glTF model for " + locId, err);
+          });
+          this.renderer = new THREE.WebGLRenderer({
+            canvas: map.getCanvas(), context: gl, antialias: true
+          });
+          this.renderer.autoClear = false;
+        },
+        render: function (gl, matrix) {
+          var rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1,0,0), modelTransform.rotateX);
+          var rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0,1,0), modelTransform.rotateY);
+          var rotationZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0,0,1), modelTransform.rotateZ);
+          var m = new THREE.Matrix4().fromArray(matrix);
+          var l = new THREE.Matrix4()
+            .makeTranslation(modelTransform.translateX, modelTransform.translateY, modelTransform.translateZ)
+            .scale(new THREE.Vector3(modelTransform.scale, -modelTransform.scale, modelTransform.scale))
+            .multiply(rotationX).multiply(rotationY).multiply(rotationZ);
+          this.camera.projectionMatrix = m.multiply(l);
+          this.renderer.resetState();
+          this.renderer.render(this.scene, this.camera);
+          this.map.triggerRepaint();
+        }
+      };
+      try { map.addLayer(customLayer); }
+      catch (e) { console.warn("[RSP] Could not add model layer for " + locId, e); }
+    });
   }
 
   // Click + hover handlers on the rendered layers.
@@ -1492,7 +1603,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.15",
+    version: "1.0.16",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1502,7 +1613,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.15 boot path attached (AR sidebar display:none override). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.16 boot path attached (Phase 5: glTF 3D models). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

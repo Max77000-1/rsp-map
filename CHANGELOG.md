@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.16 — 2026-05-17
+
+### Added
+- **Phase 5: real 3D models (glTF).** Items with `Geometry Type = model` and a non-empty `3D Model URL` field now render their .glb file directly on the map via a Mapbox custom layer. Three.js (r128) and the GLTFLoader are lazy-loaded from jsDelivr on first model — pages with no model items pay zero extra cost. Each model gets its own custom layer, positioned at the item's lng/lat in meters, rotated Y-up → Z-up. Layers are re-added automatically after style toggles (satellite).
+- New hidden input expected on the projects collection-item embed: `<input type="hidden" id="locationModelUrl" value="{{ 3D Model URL }}" />`.
+
 ## v1.0.15 — 2026-05-14
 
 ### Fixed
