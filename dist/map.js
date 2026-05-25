@@ -436,7 +436,8 @@ function __rsp_main() {
           isPolygonCentroid: !!polygonGeom,
           modelUrl: (geomType === "model" && modelUrl) ? modelUrl : "",
           modelLng: lng,
-          modelLat: lat
+          modelLat: lat,
+          modelHeightM: heightM // optional; if >0, .glb is scaled to this real height in meters
         }
       });
 
@@ -793,11 +794,11 @@ function __rsp_main() {
       var p = feats[i].properties;
       if (!p.modelUrl) continue;
       if (modelLayerIds[p.id]) continue; // already added
-      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl);
+      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0);
       modelLayerIds[p.id] = "rsp-model-" + p.id;
     }
   }
-  function addModelLayer(locId, lng, lat, modelUrl) {
+  function addModelLayer(locId, lng, lat, modelUrl, targetHeightM) {
     ensureThree().then(function () {
       if (!window.THREE || !window.THREE.GLTFLoader) {
         console.warn("[RSP] THREE / GLTFLoader unavailable.");
@@ -831,6 +832,31 @@ function __rsp_main() {
           var self = this;
           var loader = new THREE.GLTFLoader();
           loader.load(modelUrl, function (gltf) {
+            // Auto-fit: many .glb files (especially from trimesh /
+            // photogrammetry tools) are normalized into a unit cube
+            // and have no real-world scale. If `Model Height (m)`
+            // is set on the CMS item, scale the model uniformly so
+            // its vertical extent (Y, glTF Y-up) equals that height
+            // in meters. Then translate so the base rests on the
+            // ground and the model is centered horizontally.
+            try {
+              var obj = gltf.scene;
+              var box = new THREE.Box3().setFromObject(obj);
+              var size = new THREE.Vector3(); box.getSize(size);
+              var center = new THREE.Vector3(); box.getCenter(center);
+              var s = 1;
+              if (targetHeightM > 0 && size.y > 0) s = targetHeightM / size.y;
+              obj.scale.set(s, s, s);
+              obj.position.x = -center.x * s;
+              obj.position.z = -center.z * s;
+              obj.position.y = -box.min.y * s; // base at ground level
+              console.log("[RSP] model " + locId + " auto-fit: srcSize=" +
+                size.x.toFixed(2) + "x" + size.y.toFixed(2) + "x" + size.z.toFixed(2) +
+                ", scale=" + s.toFixed(3) +
+                (targetHeightM > 0 ? ", targetH=" + targetHeightM + "m" : ", no target height (default 1u=1m)"));
+            } catch (e) {
+              console.warn("[RSP] model auto-fit failed for " + locId, e);
+            }
             self.scene.add(gltf.scene);
           }, undefined, function (err) {
             console.warn("[RSP] Failed to load glTF model for " + locId, err);
@@ -1603,7 +1629,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.16",
+    version: "1.0.17",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1613,7 +1639,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.16 boot path attached (Phase 5: glTF 3D models). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.17 boot path attached (Phase 5 auto-fit: scale model to Model Height meters, base on ground). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
