@@ -180,6 +180,9 @@ function __rsp_main() {
     if (typeof modelLayerIds !== "undefined") {
       for (var k in modelLayerIds) delete modelLayerIds[k];
     }
+    if (typeof maskedBuildingLayers !== "undefined") {
+      for (var mk in maskedBuildingLayers) delete maskedBuildingLayers[mk];
+    }
     setupSourceAndLayers();
     syncSourceData();
   });
@@ -379,8 +382,14 @@ function __rsp_main() {
       var polyI = item.querySelector('input[id="locationPolygon"]');
       var heightI = item.querySelector('input[id="locationModelHeight"]');
       var modelUrlI = item.querySelector('input[id="locationModelUrl"]');
+      var modelRotI = item.querySelector('input[id="locationModelRotation"]');
+      var modelScaleI = item.querySelector('input[id="locationModelScale"]');
       var card = item.querySelector(".locations-map_card");
       var modelUrl = modelUrlI && modelUrlI.value ? modelUrlI.value.trim() : "";
+      var modelRotDeg = modelRotI && modelRotI.value ? parseFloat(modelRotI.value) : 0;
+      if (isNaN(modelRotDeg)) modelRotDeg = 0;
+      var modelScalePct = modelScaleI && modelScaleI.value ? parseFloat(modelScaleI.value) : 100;
+      if (isNaN(modelScalePct) || modelScalePct <= 0) modelScalePct = 100;
 
       var geomType = (typeI && typeI.value || "point").toLowerCase().trim();
       var rawPoly = polyI && polyI.value || "";
@@ -437,7 +446,9 @@ function __rsp_main() {
           modelUrl: (geomType === "model" && modelUrl) ? modelUrl : "",
           modelLng: lng,
           modelLat: lat,
-          modelHeightM: heightM // optional; if >0, .glb is scaled to this real height in meters
+          modelHeightM: heightM, // optional; if >0, .glb is scaled to this real height in meters
+          modelRotDeg: modelRotDeg,   // CMS yaw in degrees
+          modelScalePct: modelScalePct // CMS size as percent (100 = default)
         }
       });
 
@@ -792,6 +803,45 @@ function __rsp_main() {
     if (fc && fc.features && fc.features.length > 0) hideMapLoader();
     // Phase 5: attach glTF 3D models for items flagged with a model URL.
     syncModelLayers();
+    // Hide Mapbox's own buildings that fall inside model footprints so
+    // they don't clash with our glTF model.
+    applyBuildingMask();
+  }
+
+  // ---- Hide base-map buildings inside model footprints ------
+  // Uses the Mapbox "within" filter expression to exclude any
+  // building-extrusion feature whose geometry lies inside a model
+  // footprint polygon. Applied once per style load.
+  var maskedBuildingLayers = Object.create(null);
+  function applyBuildingMask() {
+    var modelPolys = mapPolygons.features.filter(function (f) {
+      return f.properties && f.properties.isModel && f.geometry &&
+             f.geometry.type === "Polygon";
+    });
+    if (!modelPolys.length) return;
+    var mp = { type: "MultiPolygon", coordinates: modelPolys.map(function (f) { return f.geometry.coordinates; }) };
+    var exclude = ["!", ["within", mp]];
+    var style;
+    try { style = map.getStyle(); } catch (e) { return; }
+    if (!style || !style.layers) return;
+    style.layers.forEach(function (ly) {
+      if (ly.type !== "fill-extrusion") return;
+      if (ly.id.indexOf("rsp-") === 0) return;       // our own layers
+      if (maskedBuildingLayers[ly.id]) {
+        // re-apply with refreshed polygon set (model list may have grown)
+        try { map.setFilter(ly.id, combineFilter(maskedBuildingLayers[ly.id], exclude)); } catch (e) {}
+        return;
+      }
+      var base = null;
+      try { base = map.getFilter(ly.id) || null; } catch (e) { base = null; }
+      maskedBuildingLayers[ly.id] = base; // remember original
+      try { map.setFilter(ly.id, combineFilter(base, exclude)); } catch (e) {}
+    });
+  }
+  function combineFilter(base, extra) {
+    if (!base) return extra;
+    if (base[0] === "all") return base.concat([extra]);
+    return ["all", base, extra];
   }
 
   // ---- Phase 5: 3D glTF model layers ------------------------
@@ -831,12 +881,14 @@ function __rsp_main() {
       var p = feats[i].properties;
       if (!p.modelUrl) continue;
       if (modelLayerIds[p.id]) continue; // already added
-      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0, p.source);
+      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0, p.source, p.modelRotDeg || 0, p.modelScalePct || 100);
       modelLayerIds[p.id] = "rsp-model-" + p.id;
     }
   }
-  function addModelLayer(locId, lng, lat, modelUrl, targetHeightM, source) {
+  function addModelLayer(locId, lng, lat, modelUrl, targetHeightM, source, rotDeg, scalePct) {
     var srcColor = (SOURCES[source] && SOURCES[source].color) || "#9B5DE5";
+    var userYaw = ((rotDeg || 0) * Math.PI) / 180;
+    var userScale = (scalePct > 0 ? scalePct : 100) / 100;
     ensureThree().then(function () {
       if (!window.THREE || !window.THREE.GLTFLoader) {
         console.warn("[RSP] THREE / GLTFLoader unavailable.");
@@ -887,11 +939,16 @@ function __rsp_main() {
             // ground and the model is centered horizontally.
             try {
               var obj = gltf.scene;
+              // Apply CMS-controlled yaw FIRST so the bounding box and
+              // centering reflect the final orientation.
+              obj.rotation.y = userYaw;
+              obj.updateMatrixWorld(true);
               var box = new THREE.Box3().setFromObject(obj);
               var size = new THREE.Vector3(); box.getSize(size);
               var center = new THREE.Vector3(); box.getCenter(center);
               var s = 1;
               if (targetHeightM > 0 && size.y > 0) s = targetHeightM / size.y;
+              s = s * userScale; // CMS scale multiplier (percent/100)
               obj.scale.set(s, s, s);
               obj.position.x = -center.x * s;
               obj.position.z = -center.z * s;
@@ -1720,7 +1777,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.20",
+    version: "1.0.21",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1730,7 +1787,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.20 boot path attached (model recolor to source, terrain lift, clickable model hit-volume). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.21 boot path attached (CMS rotation+scale fields, hide base buildings inside footprint). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

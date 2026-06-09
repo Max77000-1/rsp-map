@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.21 — 2026-06-09
+
+### Added
+- **CMS-controlled model rotation & scale.** New number fields `Model Rotation (deg)` and `Model Scale` (percent; 100 = default) on the projects and locations collections. Read from hidden inputs `locationModelRotation` / `locationModelScale`; the model yaws and resizes at runtime — no need to re-bake the .glb to re-orient. Rotation is applied before bounding-box fit so centering stays correct.
+- **Base-map buildings hidden inside model footprints.** `applyBuildingMask()` sets a `["!", ["within", <multipolygon>]]` filter on every base-map fill-extrusion layer, so Mapbox's own white buildings inside a project footprint disappear and don't clash with the glTF model. The rest of the city keeps its buildings. Re-applied on style reload.
+
+### Changed
+- The Beaumont .glb was reverted to its unrotated form; orientation is now driven entirely by the `Model Rotation (deg)` CMS field (set to 90).
+
 ## v1.0.20 — 2026-06-09
 
 ### Added
