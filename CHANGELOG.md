@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.20 — 2026-06-09
+
+### Added
+- **3D models are clickable.** An invisible fill-extrusion (`rsp-model-hits`, opacity 0) is built from each model's footprint up to its height; Mapbox `queryRenderedFeatures` returns it, so clicking anywhere on the model silhouette opens the project sidebar.
+- **Models take the source colour.** At load, the (texture-less) model mesh is recoloured to its category colour (projects = `#9B5DE5`), matching the footprint polygon.
+
+### Fixed
+- **Models partly buried by terrain.** The model origin is now lifted 6 m above the queried terrain elevation so coarse terrain bumps no longer clip the base.
+- The visible solid extrusion (`rsp-buildings`) now excludes model items (`isModel != true`) so the glTF mesh is the only 3D body, with the footprint shown flat beneath it.
+
 ## v1.0.19 — 2026-06-09
 
 ### Added

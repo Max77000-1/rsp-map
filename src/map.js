@@ -455,7 +455,12 @@ function __rsp_main() {
             id: locId,
             source: source,
             description: description,
-            height: isModelItem ? 0 : heightM
+            // For model items, the footprint stays visible (flat fill)
+            // but we ALSO extrude it invisibly to the model height so
+            // the whole model silhouette is clickable. `isModel` routes
+            // it to the invisible hit layer instead of the solid one.
+            height: heightM,
+            isModel: !!isModelItem
           }
         });
       }
@@ -669,13 +674,35 @@ function __rsp_main() {
         type: "fill-extrusion",
         source: POLY_SOURCE_ID,
         minzoom: 13,
-        filter: [">", ["to-number", ["get", "height"]], 0],
+        // Solid extrusion only for NON-model polygons. Model items
+        // are represented by their glTF mesh, not a solid block.
+        filter: ["all",
+          [">", ["to-number", ["get", "height"]], 0],
+          ["!=", ["get", "isModel"], true]
+        ],
         paint: {
           "fill-extrusion-color": colourMatchExpr(),
           "fill-extrusion-height": ["to-number", ["get", "height"]],
           "fill-extrusion-base": 0,
           "fill-extrusion-opacity": 0.85,
           "fill-extrusion-vertical-gradient": true
+        }
+      });
+
+      // Invisible click target for glTF model items: an extrusion of
+      // the footprint up to the model height, opacity 0. Mapbox
+      // queryRenderedFeatures still returns it, so clicking anywhere
+      // on the model's silhouette opens the project sidebar.
+      map.addLayer({
+        id: "rsp-model-hits",
+        type: "fill-extrusion",
+        source: POLY_SOURCE_ID,
+        filter: ["==", ["get", "isModel"], true],
+        paint: {
+          "fill-extrusion-color": "#ffffff",
+          "fill-extrusion-height": ["to-number", ["get", "height"]],
+          "fill-extrusion-base": 0,
+          "fill-extrusion-opacity": 0
         }
       });
 
@@ -804,11 +831,12 @@ function __rsp_main() {
       var p = feats[i].properties;
       if (!p.modelUrl) continue;
       if (modelLayerIds[p.id]) continue; // already added
-      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0);
+      addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0, p.source);
       modelLayerIds[p.id] = "rsp-model-" + p.id;
     }
   }
-  function addModelLayer(locId, lng, lat, modelUrl, targetHeightM) {
+  function addModelLayer(locId, lng, lat, modelUrl, targetHeightM, source) {
+    var srcColor = (SOURCES[source] && SOURCES[source].color) || "#9B5DE5";
     ensureThree().then(function () {
       if (!window.THREE || !window.THREE.GLTFLoader) {
         console.warn("[RSP] THREE / GLTFLoader unavailable.");
@@ -868,6 +896,20 @@ function __rsp_main() {
               obj.position.x = -center.x * s;
               obj.position.z = -center.z * s;
               obj.position.y = -box.min.y * s; // base at ground level
+              // Recolor the (texture-less) mesh to the source colour so
+              // the model reads as part of its category, matching the
+              // footprint polygon. Keep a little shading via roughness.
+              obj.traverse(function (o) {
+                if (o.isMesh && o.material) {
+                  var mats = Array.isArray(o.material) ? o.material : [o.material];
+                  mats.forEach(function (mm) {
+                    if (mm.color && mm.color.set) mm.color.set(srcColor);
+                    if ("metalness" in mm) mm.metalness = 0.1;
+                    if ("roughness" in mm) mm.roughness = 0.85;
+                    mm.needsUpdate = true;
+                  });
+                }
+              });
               console.log("[RSP] model " + locId + " auto-fit: srcSize=" +
                 size.x.toFixed(2) + "x" + size.y.toFixed(2) + "x" + size.z.toFixed(2) +
                 ", scale=" + s.toFixed(3) +
@@ -894,7 +936,11 @@ function __rsp_main() {
             var el = null;
             try { el = map.queryTerrainElevation(modelOrigin, { exaggerated: true }); } catch (e) {}
             if (el !== null && el !== undefined) {
-              var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, el);
+              // Lift a few metres above the queried elevation. The
+              // rendered terrain mesh is coarser than the query, so a
+              // small lift keeps the model base from being clipped by
+              // terrain bumps.
+              var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, el + 6);
               modelTransform.translateX = mc.x;
               modelTransform.translateY = mc.y;
               modelTransform.translateZ = mc.z;
@@ -956,6 +1002,16 @@ function __rsp_main() {
     map.on("mouseleave", "rsp-points", function () { map.getCanvas().style.cursor = ""; });
     map.on("mouseenter", "rsp-points-centroid", function () { map.getCanvas().style.cursor = "pointer"; });
     map.on("mouseleave", "rsp-points-centroid", function () { map.getCanvas().style.cursor = ""; });
+
+    // Click on a glTF model (via its invisible extrusion hit volume).
+    map.on("click", "rsp-model-hits", function (e) {
+      var f = e.features && e.features[0];
+      if (!f) return;
+      stopRotation();
+      openSidebarFor(f.properties.id);
+    });
+    map.on("mouseenter", "rsp-model-hits", function () { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "rsp-model-hits", function () { map.getCanvas().style.cursor = ""; });
 
     // ---- Polygon click + hover -----------------------------
     var hoveredPolyId = null;
@@ -1664,7 +1720,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.19",
+    version: "1.0.20",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1674,7 +1730,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.19 boot path attached (Draco support + terrain-elevation placement for 3D models). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.20 boot path attached (model recolor to source, terrain lift, clickable model hit-volume). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
