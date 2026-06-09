@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.18 — 2026-06-09
+
+### Fixed
+- **Model items no longer double-render.** An item with both a `Polygon GeoJSON` footprint and `Geometry Type = model` was extruding the footprint to `Model Height (m)` (via the buildings layer) AND rendering the glTF, so a solid block collided with the 3D model. Now, when an item is a model, its footprint polygon is forced flat (height 0) — it grounds the model — while `Model Height (m)` scales the glTF only.
+
+### Added
+- First production massing model shipped: `assets/models/syria-towers-massing.glb` (procedurally generated twin towers + podium + perimeter blocks + plaza/fountain, brand palette, ~187×104×128 m), attached to `syria-towers-complex-baramkeh` with `Model Height (m) = 102`.
+
 ## v1.0.17 — 2026-05-25
 
 ### Fixed

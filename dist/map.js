@@ -442,6 +442,11 @@ function __rsp_main() {
       });
 
       // If polygon was successfully parsed, also push polygon feature.
+      // When the item is a glTF model, the .glb IS the 3D body, so the
+      // footprint polygon must stay FLAT (height 0) — otherwise the
+      // fill-extrusion would rise to `Model Height (m)` and collide
+      // with the model. `Model Height (m)` scales the glTF only.
+      var isModelItem = (geomType === "model" && modelUrl);
       if (polygonGeom) {
         mapPolygons.features.push({
           type: "Feature",
@@ -450,7 +455,7 @@ function __rsp_main() {
             id: locId,
             source: source,
             description: description,
-            height: heightM
+            height: isModelItem ? 0 : heightM
           }
         });
       }
@@ -1629,7 +1634,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.17",
+    version: "1.0.18",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1639,7 +1644,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.17 boot path attached (Phase 5 auto-fit: scale model to Model Height meters, base on ground). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.18 boot path attached (model items keep footprint polygon flat, no extrusion clash). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
