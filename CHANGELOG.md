@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.19 — 2026-06-09
+
+### Added
+- **Draco-compressed glTF support.** `ensureThree()` now also lazy-loads `DRACOLoader`, and each model loader attaches a Draco decoder (gstatic CDN). This lets the map read Draco-encoded `.glb` files, which shrink heavy AI-generated models dramatically (e.g. an Umayyad Mosque model: 942k tris / 22 MB → 113k tris / 312 KB).
+- Tooling: `tools/optimize-glb.mjs` (gltf-transform: weld → simplify → prune/dedup → stone colour → Draco) for turning Tripo/Meshy exports into web-ready models.
+
+### Fixed
+- **3D models buried under terrain.** With terrain enabled, a model placed at sea level (altitude 0) sinks below the rendered ground — Damascus sits at ~680 m, so the model was 680 m underground (invisible). The custom-layer `render()` now queries the exaggerated terrain elevation at the model origin once it's available and rebuilds the transform so the base rests on the visible terrain surface. Terrain stays on; models show.
+
 ## v1.0.18 — 2026-06-09
 
 ### Fixed

@@ -778,18 +778,23 @@ function __rsp_main() {
   function ensureThree() {
     if (threeReady) return threeReady;
     threeReady = new Promise(function (resolve) {
+      function inject(src, cb) {
+        var s = document.createElement("script");
+        s.src = src; s.onload = cb; document.head.appendChild(s);
+      }
+      // GLTFLoader, then DRACOLoader (Draco-compressed .glb support).
+      // Optimized AI models are Draco-encoded to shrink 22 MB → ~300 KB,
+      // so the decoder is required to read them.
+      function loadDraco() {
+        if (window.THREE && window.THREE.DRACOLoader) { resolve(); return; }
+        inject("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js", function () { resolve(); });
+      }
       function loadGLTFLoader() {
-        if (window.THREE && window.THREE.GLTFLoader) { resolve(); return; }
-        var s2 = document.createElement("script");
-        s2.src = "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js";
-        s2.onload = function () { resolve(); };
-        document.head.appendChild(s2);
+        if (window.THREE && window.THREE.GLTFLoader) { loadDraco(); return; }
+        inject("https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js", loadDraco);
       }
       if (window.THREE) { loadGLTFLoader(); return; }
-      var s1 = document.createElement("script");
-      s1.src = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js";
-      s1.onload = loadGLTFLoader;
-      document.head.appendChild(s1);
+      inject("https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js", loadGLTFLoader);
     });
     return threeReady;
   }
@@ -836,6 +841,14 @@ function __rsp_main() {
           this.map = map;
           var self = this;
           var loader = new THREE.GLTFLoader();
+          // Attach a Draco decoder so compressed .glb files load.
+          if (THREE.DRACOLoader) {
+            try {
+              var draco = new THREE.DRACOLoader();
+              draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+              loader.setDRACOLoader(draco);
+            } catch (e) { console.warn("[RSP] DRACOLoader setup failed", e); }
+          }
           loader.load(modelUrl, function (gltf) {
             // Auto-fit: many .glb files (especially from trimesh /
             // photogrammetry tools) are normalized into a unit cube
@@ -872,6 +885,23 @@ function __rsp_main() {
           this.renderer.autoClear = false;
         },
         render: function (gl, matrix) {
+          // Terrain elevation fix: the model origin must sit on the
+          // RENDERED terrain surface, not at sea level. Damascus is
+          // ~680 m up; with terrain on, a sea-level model is buried.
+          // Query the (exaggerated) terrain height once it's available
+          // and rebuild the origin so the base rests on the ground.
+          if (!this._elevLocked && map.queryTerrainElevation) {
+            var el = null;
+            try { el = map.queryTerrainElevation(modelOrigin, { exaggerated: true }); } catch (e) {}
+            if (el !== null && el !== undefined) {
+              var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, el);
+              modelTransform.translateX = mc.x;
+              modelTransform.translateY = mc.y;
+              modelTransform.translateZ = mc.z;
+              modelTransform.scale = mc.meterInMercatorCoordinateUnits();
+              this._elevLocked = true;
+            }
+          }
           var rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1,0,0), modelTransform.rotateX);
           var rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0,1,0), modelTransform.rotateY);
           var rotationZ = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0,0,1), modelTransform.rotateZ);
@@ -1634,7 +1664,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.18",
+    version: "1.0.19",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1644,7 +1674,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.18 boot path attached (model items keep footprint polygon flat, no extrusion clash). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.19 boot path attached (Draco support + terrain-elevation placement for 3D models). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
