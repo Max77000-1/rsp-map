@@ -946,8 +946,17 @@ function __rsp_main() {
               var box = new THREE.Box3().setFromObject(obj);
               var size = new THREE.Vector3(); box.getSize(size);
               var center = new THREE.Vector3(); box.getCenter(center);
+              // Height drives the real-world size. If the CMS height
+              // input is missing/empty (e.g. a broken Designer binding),
+              // fall back to a visible default so the model never renders
+              // microscopically. Editors fine-tune via Model Scale.
+              var effHeightM = targetHeightM > 0 ? targetHeightM : 60;
+              if (targetHeightM <= 0) {
+                console.warn("[RSP] model " + locId + ": Model Height (m) is empty — " +
+                  "using default 60 m. Check the locationModelHeight input binding.");
+              }
               var s = 1;
-              if (targetHeightM > 0 && size.y > 0) s = targetHeightM / size.y;
+              if (size.y > 0) s = effHeightM / size.y;
               s = s * userScale; // CMS scale multiplier (percent/100)
               obj.scale.set(s, s, s);
               obj.position.x = -center.x * s;
@@ -1777,7 +1786,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.21",
+    version: "1.0.22",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1787,7 +1796,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.21 boot path attached (CMS rotation+scale fields, hide base buildings inside footprint). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.22 boot path attached (default model height fallback when input empty). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

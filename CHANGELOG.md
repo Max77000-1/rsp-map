@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.22 — 2026-06-09
+
+### Fixed
+- **Models no longer render microscopically when the height input is empty.** If `locationModelHeight` is missing/empty (e.g. a broken Designer binding after editing the embed), the model now falls back to a visible 60 m default and logs a warning naming the item, instead of rendering at 1 unit = 1 m (invisible). Editors fine-tune via Model Scale.
+
+# Changelog
+
 ## v1.0.21 — 2026-06-09
 
 ### Added
