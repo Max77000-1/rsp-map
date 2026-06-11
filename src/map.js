@@ -760,11 +760,30 @@ function __rsp_main() {
   }
 
   // Retry until source/layers are added (typically once style is loaded).
+  // `isStyleLoaded()` can stay false indefinitely under projection:globe
+  // even after the style is visually rendered, which would block the
+  // source — and therefore ALL markers + 3D models — from ever being
+  // added. So we never gate on it: we attempt directly, and drive
+  // retries off Mapbox's own readiness events (`idle` is the reliable
+  // signal that the style is loaded) PLUS a polling fallback. Whichever
+  // path lets addSource succeed first wins.
+  var boundReadyEvents = false;
+  function tryAddSourceOnce() {
+    if (sourceAdded) return;
+    if (setupSourceAndLayers()) syncSourceData();
+  }
   function ensureSourceWithRetry() {
     if (sourceAdded) return;
     if (setupSourceAndLayers()) {
       syncSourceData();
       return;
+    }
+    if (!boundReadyEvents) {
+      boundReadyEvents = true;
+      map.on("idle", tryAddSourceOnce);
+      map.on("styledata", tryAddSourceOnce);
+      map.on("sourcedata", tryAddSourceOnce);
+      map.once("load", tryAddSourceOnce);
     }
     setTimeout(ensureSourceWithRetry, 400);
   }
@@ -854,10 +873,15 @@ function __rsp_main() {
   var threeReady = null; // Promise<void>
   function ensureThree() {
     if (threeReady) return threeReady;
-    threeReady = new Promise(function (resolve) {
+    threeReady = new Promise(function (resolve, reject) {
       function inject(src, cb) {
         var s = document.createElement("script");
-        s.src = src; s.onload = cb; document.head.appendChild(s);
+        s.src = src; s.onload = cb;
+        // If a CDN script fails to load, reject so the cached promise
+        // is cleared and the next render retries (instead of hanging
+        // silently with the model never appearing).
+        s.onerror = function () { threeReady = null; reject(new Error("script load failed: " + src)); };
+        document.head.appendChild(s);
       }
       // GLTFLoader, then DRACOLoader (Draco-compressed .glb support).
       // Optimized AI models are Draco-encoded to shrink 22 MB → ~300 KB,
@@ -880,9 +904,9 @@ function __rsp_main() {
     for (var i = 0; i < feats.length; i++) {
       var p = feats[i].properties;
       if (!p.modelUrl) continue;
-      if (modelLayerIds[p.id]) continue; // already added
+      if (modelLayerIds[p.id]) continue; // already added or in progress
+      modelLayerIds[p.id] = "rsp-model-" + p.id; // claim slot to avoid double-add
       addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0, p.source, p.modelRotDeg || 0, p.modelScalePct || 100);
-      modelLayerIds[p.id] = "rsp-model-" + p.id;
     }
   }
   function addModelLayer(locId, lng, lat, modelUrl, targetHeightM, source, rotDeg, scalePct) {
@@ -892,6 +916,7 @@ function __rsp_main() {
     ensureThree().then(function () {
       if (!window.THREE || !window.THREE.GLTFLoader) {
         console.warn("[RSP] THREE / GLTFLoader unavailable.");
+        delete modelLayerIds[locId]; // release so a later render retries
         return;
       }
       var modelOrigin = [lng, lat];
@@ -1029,7 +1054,15 @@ function __rsp_main() {
         }
       };
       try { map.addLayer(customLayer); }
-      catch (e) { console.warn("[RSP] Could not add model layer for " + locId, e); }
+      catch (e) {
+        console.warn("[RSP] Could not add model layer for " + locId, e);
+        delete modelLayerIds[locId]; // release so a later render retries
+      }
+    }).catch(function (err) {
+      // ensureThree() rejected (CDN script failed). Release the slot
+      // so the next render re-attempts loading three.js + the model.
+      console.warn("[RSP] model deps failed to load for " + locId + ", will retry:", err && err.message);
+      delete modelLayerIds[locId];
     });
   }
 
@@ -1786,7 +1819,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.22",
+    version: "1.0.23",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1796,7 +1829,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.22 boot path attached (default model height fallback when input empty). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.23 boot path attached (event-driven boot, never gate on isStyleLoaded; model-dep retry). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

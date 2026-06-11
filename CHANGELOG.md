@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.23 — 2026-06-09
+
+### Fixed
+- **Map sometimes loaded the basemap but NO data (markers, polygons, 3D models).** Under projection:globe, `isStyleLoaded()` can stay false indefinitely even after the style is visually rendered, so `addSource` kept throwing "Style is not done loading" and the source — hence every marker and model — was never added. The boot no longer waits on a 400 ms poll alone: it also drives source-add attempts off Mapbox readiness events (`idle`, `styledata`, `sourcedata`, `load`), so the data layer attaches the moment the style is actually ready. This was intermittent (network/timing dependent), which is why "yesterday it worked, today it did not".
+- **3D model dependency loads now retry.** If three.js / GLTFLoader / DRACOLoader fail to fetch from their CDN, the cached promise is cleared and the model slot released, so a later render retries instead of the model hanging invisibly forever.
+
+
 ## v1.0.22 — 2026-06-09
 
 ### Fixed
