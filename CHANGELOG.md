@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.24 — 2026-06-09
+
+### Fixed
+- **3D models stayed clickable after the CMS polygon is removed.** Hit volume now auto-generated from the model footprint (dedicated rsp-model-hits-src source); models clickable with or without a polygon.
+
+
 ## v1.0.23 — 2026-06-09
 
 ### Fixed

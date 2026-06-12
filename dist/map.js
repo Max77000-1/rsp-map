@@ -516,8 +516,39 @@ function __rsp_main() {
   // subset, which re-clusters automatically.
   var SOURCE_ID = "rsp-points";
   var POLY_SOURCE_ID = "rsp-polygons";
+  var MODEL_HIT_SOURCE_ID = "rsp-model-hits-src";
   var POLYGON_MIN_ZOOM = 9; // Below this, only centroid markers show.
   var sourceAdded = false;
+
+  // Auto-generated invisible click boxes for 3D models, keyed by id.
+  // Built from each model's real footprint after load, so a model is
+  // clickable with or without a CMS polygon.
+  var modelHitFeatures = Object.create(null);
+  function modelHitCollection() {
+    var feats = [];
+    for (var k in modelHitFeatures) feats.push(modelHitFeatures[k]);
+    return { type: "FeatureCollection", features: feats };
+  }
+  function pushModelHitBox(locId, lng, lat, halfWidthM, halfDepthM, heightM) {
+    var dLat = halfDepthM / 111320;
+    var dLng = halfWidthM / (111320 * Math.cos(lat * Math.PI / 180) || 1);
+    modelHitFeatures[locId] = {
+      type: "Feature",
+      properties: { id: locId, height: heightM },
+      geometry: {
+        type: "Polygon",
+        coordinates: [[
+          [lng - dLng, lat - dLat],
+          [lng + dLng, lat - dLat],
+          [lng + dLng, lat + dLat],
+          [lng - dLng, lat + dLat],
+          [lng - dLng, lat - dLat]
+        ]]
+      }
+    };
+    var src = map.getSource(MODEL_HIT_SOURCE_ID);
+    if (src && src.setData) src.setData(modelHitCollection());
+  }
 
   function colourMatchExpr() {
     // Mapbox `match` expression: source name → colour.
@@ -700,15 +731,19 @@ function __rsp_main() {
         }
       });
 
-      // Invisible click target for glTF model items: an extrusion of
-      // the footprint up to the model height, opacity 0. Mapbox
-      // queryRenderedFeatures still returns it, so clicking anywhere
-      // on the model's silhouette opens the project sidebar.
+      // Invisible click target for glTF model items. The hit volume is
+      // a box GENERATED FROM THE MODEL ITSELF (its real footprint and
+      // height after auto-fit), held in a dedicated source — so the
+      // model stays clickable even when the item has NO polygon. Mapbox
+      // queryRenderedFeatures returns it, so clicking the model opens
+      // the project sidebar.
+      if (!map.getSource(MODEL_HIT_SOURCE_ID)) {
+        map.addSource(MODEL_HIT_SOURCE_ID, { type: "geojson", data: modelHitCollection() });
+      }
       map.addLayer({
         id: "rsp-model-hits",
         type: "fill-extrusion",
-        source: POLY_SOURCE_ID,
-        filter: ["==", ["get", "isModel"], true],
+        source: MODEL_HIT_SOURCE_ID,
         paint: {
           "fill-extrusion-color": "#ffffff",
           "fill-extrusion-height": ["to-number", ["get", "height"]],
@@ -987,6 +1022,12 @@ function __rsp_main() {
               obj.position.x = -center.x * s;
               obj.position.z = -center.z * s;
               obj.position.y = -box.min.y * s; // base at ground level
+              // Register an invisible click box matching the model's real
+              // footprint + height, so it's clickable with NO CMS polygon.
+              try {
+                var realH = size.y * s;
+                pushModelHitBox(locId, lng, lat, (size.x * s) / 2, (size.z * s) / 2, realH > 0 ? realH : effHeightM);
+              } catch (e) {}
               // Recolor the (texture-less) mesh to the source colour so
               // the model reads as part of its category, matching the
               // footprint polygon. Keep a little shading via roughness.
@@ -1819,7 +1860,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.23",
+    version: "1.0.24",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1829,7 +1870,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.23 boot path attached (event-driven boot, never gate on isStyleLoaded; model-dep retry). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.24 boot path attached (models clickable without a polygon via auto-generated hit box). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
