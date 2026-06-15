@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.25 — 2026-06-09
+
+### Fixed
+- **Sidebar cards appearing on page load before any click.** Replaced the ad-hoc hide hacks with a single CSS source of truth using `:has()`: a `.locations-map_wrapper` is shown ONLY when it actually contains a `.locations-map_item.is--show`. This also subsumes the Arabic `:lang(ar){display:none}` fix — locale-agnostic now.
+- **3D model sat at a different height each load (half-buried or floating).** The terrain elevation was locked on the FIRST query, whose value came from partly-loaded terrain tiles and varied by timing. The model now re-queries the terrain height every frame and tracks it, settling to the correct elevation as tiles refine. Lift reduced to 1 m.
+
+### Changed
+- **Models load only at close zoom (>= 14).** three.js + the .glb are no longer fetched until the user is zoomed in enough to actually see the model; below zoom 14 the model is not drawn and its click target is inactive. Saves bandwidth and avoids tiny specks at city scale.
+
+
 ## v1.0.24 — 2026-06-09
 
 ### Fixed

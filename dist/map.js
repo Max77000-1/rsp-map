@@ -744,6 +744,7 @@ function __rsp_main() {
         id: "rsp-model-hits",
         type: "fill-extrusion",
         source: MODEL_HIT_SOURCE_ID,
+        minzoom: 14, // only clickable when the model is actually shown
         paint: {
           "fill-extrusion-color": "#ffffff",
           "fill-extrusion-height": ["to-number", ["get", "height"]],
@@ -934,7 +935,20 @@ function __rsp_main() {
     });
     return threeReady;
   }
+  // Models only load/show when zoomed in enough to see them clearly.
+  // Below this they would be tiny specks (and waste bandwidth loading
+  // three.js + the .glb), so we defer loading until the user is close.
+  var MODEL_MIN_ZOOM = 14;
+  var modelZoomBound = false;
   function syncModelLayers() {
+    // Defer loading entirely until the user is zoomed in.
+    if (map.getZoom() < MODEL_MIN_ZOOM) {
+      if (!modelZoomBound) {
+        modelZoomBound = true;
+        map.on("zoomend", syncModelLayers); // retry when they zoom in
+      }
+      return;
+    }
     var feats = mapLocations.features;
     for (var i = 0; i < feats.length; i++) {
       var p = feats[i].properties;
@@ -1059,26 +1073,27 @@ function __rsp_main() {
           this.renderer.autoClear = false;
         },
         render: function (gl, matrix) {
-          // Terrain elevation fix: the model origin must sit on the
-          // RENDERED terrain surface, not at sea level. Damascus is
-          // ~680 m up; with terrain on, a sea-level model is buried.
-          // Query the (exaggerated) terrain height once it's available
-          // and rebuild the origin so the base rests on the ground.
-          if (!this._elevLocked && map.queryTerrainElevation) {
+          // Hide the model when zoomed out — it's only meant to be seen
+          // up close. Skipping the draw (and triggerRepaint) lets the map
+          // go idle, so it costs nothing while far away.
+          if (this.map && this.map.getZoom() < MODEL_MIN_ZOOM) return;
+          // Terrain elevation: the model origin must sit on the RENDERED
+          // terrain surface, not at sea level. Damascus is ~680 m up; a
+          // sea-level model would be buried. We re-query EVERY frame (not
+          // once) and update the origin, so as terrain tiles refine the
+          // model settles to the correct height. Locking on the first
+          // value caused inconsistent height (half-buried / floating)
+          // because that value came from partly-loaded terrain tiles.
+          if (map.queryTerrainElevation) {
             var el = null;
             try { el = map.queryTerrainElevation(modelOrigin, { exaggerated: true }); } catch (e) {}
-            if (el !== null && el !== undefined) {
-              // Lift a few metres above the queried elevation. The
-              // rendered terrain mesh is coarser than the query, so a
-              // small lift keeps the model base from being clipped by
-              // terrain bumps.
-              var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, el + 6);
-              modelTransform.translateX = mc.x;
-              modelTransform.translateY = mc.y;
-              modelTransform.translateZ = mc.z;
-              modelTransform.scale = mc.meterInMercatorCoordinateUnits();
-              this._elevLocked = true;
-            }
+            // Lift 1 m to avoid z-fighting with the terrain surface.
+            var alt = (el !== null && el !== undefined) ? el + 1 : 0;
+            var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, alt);
+            modelTransform.translateX = mc.x;
+            modelTransform.translateY = mc.y;
+            modelTransform.translateZ = mc.z;
+            modelTransform.scale = mc.meterInMercatorCoordinateUnits();
           }
           var rotationX = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(1,0,0), modelTransform.rotateX);
           var rotationY = new THREE.Matrix4().makeRotationAxis(new THREE.Vector3(0,1,0), modelTransform.rotateY);
@@ -1662,14 +1677,15 @@ function __rsp_main() {
       ".cms_button:not(.is--active),[id$=\"cms\"]:not(.is--active){opacity:0.45;filter:grayscale(0.6);transition:opacity 0.2s,filter 0.2s,box-shadow 0.2s;}",
       ".cms_button.is--active,[id$=\"cms\"].is--active{opacity:1;filter:none;}",
 
-      // Arabic sidebar fix. The Webflow project carries a rule
-      // `.locations-map_wrapper:lang(ar){display:none}` that hides
-      // the info card entirely in the Arabic locale, and the card
-      // also resolves to width:0 there. Force the wrapper visible
-      // and 20em wide so Arabic matches English. (Maher can also
-      // delete that Designer rule; this override is defensive.)
-      ".locations-map_wrapper:lang(ar){display:block !important;width:20em !important;}",
-      ".locations-map_wrapper:lang(ar) .locations-map_item.is--show{width:20em !important;}",
+      // Sidebar visibility — single source of truth via :has().
+      // A wrapper is shown ONLY when it actually contains a visible
+      // card (`.locations-map_item.is--show`). This fixes two bugs at
+      // once: (1) cards appearing on page load before any marker is
+      // clicked, and (2) the Webflow rule `:lang(ar){display:none}`
+      // that hid the card entirely in Arabic. Locale-agnostic.
+      ".locations-map_wrapper:has(.locations-map_item.is--show){display:block !important;width:20em !important;}",
+      ".locations-map_wrapper:not(:has(.locations-map_item.is--show)){display:none !important;}",
+      ".locations-map_wrapper .locations-map_item.is--show{width:20em !important;}",
 
       // Active state coloured ring per source. Border + soft glow.
       // Uses data-rsp-src to be order-independent.
@@ -1860,7 +1876,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.24",
+    version: "1.0.25",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1870,7 +1886,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.24 boot path attached (models clickable without a polygon via auto-generated hit box). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.25 boot path attached (sidebar :has fix, continuous terrain height, model loads only at close zoom). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
