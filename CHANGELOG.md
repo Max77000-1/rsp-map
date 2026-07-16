@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.28 — 2026-07-16
+
+### Fixed
+- **The 70 lingering "open" cards survived every sweep — guard logic bug.** Live probing showed the stray cards are items WITHOUT valid coordinates: processList skips them before assigning `data-loc-id`, so `getAttribute("data-loc-id")` returns null. With no card open, `currentOpenId` is also null, and the sweep guard `id !== currentOpenId` evaluated `null !== null` = false — treating every no-id item as "the open card" and skipping it, forever. The guard now strips whenever no card is open, and otherwise keeps only the exact id match (a no-id item can never be the open card). One-line root-cause fix after v1.0.26/27 hardened the sweep cadence.
+- Clarified v1.0.27 diagnosis: the 560-of-630 gap is items with no valid lat/lng (they legitimately have no marker), not dropped batches.
+
+
 ## v1.0.27 — 2026-07-16
 
 ### Fixed

@@ -1477,7 +1477,12 @@ function __rsp_main() {
   function stripStrayShownCards() {
     var items = document.querySelectorAll(".locations-map_item.is--show");
     for (var j = 0; j < items.length; j++) {
-      if (items[j].getAttribute("data-loc-id") !== currentOpenId) {
+      // Keep ONLY the user-opened card. Items with no data-loc-id can
+      // never be the open card (opening requires an id match) — without
+      // this guard, id=null items matched currentOpenId=null (null !==
+      // null is false) and 70 no-coordinate items survived every sweep.
+      var id = items[j].getAttribute("data-loc-id");
+      if (!currentOpenId || id !== currentOpenId) {
         items[j].classList.remove("is--show");
       }
     }
@@ -1915,7 +1920,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.27",
+    version: "1.0.28",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1925,7 +1930,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.27 boot path attached (observer never self-stops; 5s drift net catches late Finsweet batches). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.28 boot path attached (sweep guard fix: null-id cards always stripped). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
