@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.26 — 2026-06-16
+
+### Fixed
+- **Cards still appearing on page load (root cause found).** Live diagnosis showed 143 items arriving from Webflow with `is--show` BAKED into the collection-item template class (`locations-map_item is--show w-dyn-item`, list `location-list4`). The timed 0/600/1800 ms cleanup missed late Finsweet batches, which kept re-introducing "open" cards for tens of seconds. The sweep (`stripStrayShownCards`) now also runs on EVERY render — each Finsweet batch triggers one — and is guarded by `currentOpenId`, so the card the user opened (marker click or deep link) is never closed by the sweep.
+- **Preloader stuck / reappearing.** A Webflow interaction was observed re-showing the preloader (inline `display:flex`) after our one-shot hide, leaving users on the loading screen indefinitely. `hidePreloader` now hides ALL `.preloader` nodes, re-asserts on every render, and injects a stylesheet kill rule (`display:none !important`) 600 ms after the first hide — a stylesheet `!important` beats inline styles, so the overlay cannot come back.
+
+### Designer note
+- The real root of the card bug is `is--show` baked into the locations/attractions collection-item template in the Designer. The map is now immune either way, but removing that combo class in the Designer remains the clean fix.
+
+
 ## v1.0.25 — 2026-06-09
 
 ### Fixed

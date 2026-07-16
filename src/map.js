@@ -1323,7 +1323,14 @@ function __rsp_main() {
   // first, which may be an unrendered 0x0 copy — that produced
   // an empty card in Arabic. We therefore show EVERY node that
   // matches the slug; only the rendered one has size.
+  // The one card the USER opened (marker click / deep link). Cleanup
+  // sweeps strip `is--show` from every other item — some collection
+  // templates ship items with `is--show` baked in from the Designer,
+  // and every late Finsweet batch re-introduces them.
+  var currentOpenId = null;
+
   function openSidebarFor(locId) {
+    currentOpenId = locId;
     jq(".locations-map_wrapper").addClass("is--show");
     var allItems = document.querySelectorAll(".locations-map_item");
     for (var i = 0; i < allItems.length; i++) allItems[i].classList.remove("is--show");
@@ -1391,6 +1398,7 @@ function __rsp_main() {
   // `.close-block` class, so a class-only binding missed them.
   // Delegation also covers cards injected later by Finsweet.
   function closeSidebar() {
+    currentOpenId = null;
     jq(".locations-map_wrapper").removeClass("is--show");
     jq(".locations-map_item").removeClass("is--show");
     stopRotation();
@@ -1459,18 +1467,24 @@ function __rsp_main() {
     }
   }, true);
 
-  // Hide sidebar on load — run now and again shortly after, in
-  // case the Webflow wrapper ships with `is--show` and jQuery /
-  // the DOM was not ready on the first attempt.
-  function forceHideSidebarOnce() {
-    var wrap = document.querySelectorAll(".locations-map_wrapper");
-    for (var i = 0; i < wrap.length; i++) wrap[i].classList.remove("is--show");
+  // Strip stray `is--show` from every card EXCEPT the one the user
+  // opened. Root cause: some Designer collection-item templates ship
+  // with `is--show` baked into the item class, so 100+ cards arrive
+  // "open" — and every late Finsweet batch re-introduces more. This
+  // sweep runs at boot, on timers, AND on every render (each Finsweet
+  // batch triggers a render), so late arrivals are cleaned too. The
+  // currentOpenId guard keeps the user's open card (incl. deep links).
+  function stripStrayShownCards() {
     var items = document.querySelectorAll(".locations-map_item.is--show");
-    for (var j = 0; j < items.length; j++) items[j].classList.remove("is--show");
+    for (var j = 0; j < items.length; j++) {
+      if (items[j].getAttribute("data-loc-id") !== currentOpenId) {
+        items[j].classList.remove("is--show");
+      }
+    }
   }
-  forceHideSidebarOnce();
-  setTimeout(forceHideSidebarOnce, 600);
-  setTimeout(forceHideSidebarOnce, 1800);
+  stripStrayShownCards();
+  setTimeout(stripStrayShownCards, 600);
+  setTimeout(stripStrayShownCards, 1800);
 
   // The sidebar card width comes from the (confusingly named)
   // `is---hidden` class on `.locations-map_wrapper`, which sets
@@ -1510,6 +1524,11 @@ function __rsp_main() {
     encounters.forEach(function (e) {
       if (e.source && sourceOrder.indexOf(e.source) < 0) sourceOrder.push(e.source);
     });
+    // Every render (incl. each late Finsweet batch): clean the stray
+    // baked-in `is--show` cards, and re-assert the preloader is gone
+    // (a Webflow interaction can re-show it after our one-shot hide).
+    stripStrayShownCards();
+    hidePreloader();
     // Source/layers may not be addable yet (style still loading).
     // ensureSourceWithRetry keeps trying until it succeeds, then
     // pushes data. If already added, just push the new data.
@@ -1517,7 +1536,6 @@ function __rsp_main() {
     else ensureSourceWithRetry();
     bindFilterButtons();
     if (!initialRenderDone) {
-      hidePreloader();
       hideNextButton();
       injectMapStyles();
       // Legend removed in v1.0.8 — source names already visible inside the filter buttons.
@@ -1735,12 +1753,30 @@ function __rsp_main() {
   // `window.load`. Finsweet's paginated XHRs delay that event,
   // sometimes indefinitely on slow networks. Hide it ourselves
   // once the first batch of markers is on screen.
+  //
+  // A Webflow interaction was observed RE-SHOWING the preloader
+  // (inline `display:flex`) after our one-shot hide, leaving users
+  // stuck on the loading screen. So besides the inline fade, we
+  // inject a stylesheet kill rule — `!important` in a stylesheet
+  // beats inline styles, so nothing can bring the overlay back.
+  var preloaderKilled = false;
   function hidePreloader() {
-    var pre = document.querySelector(".preloader");
-    if (!pre) return;
-    pre.style.transition = "opacity 0.4s";
-    pre.style.opacity = "0";
-    setTimeout(function () { pre.style.display = "none"; }, 500);
+    var pres = document.querySelectorAll(".preloader");
+    for (var i = 0; i < pres.length; i++) {
+      pres[i].style.transition = "opacity 0.4s";
+      pres[i].style.opacity = "0";
+      pres[i].style.pointerEvents = "none";
+    }
+    if (!preloaderKilled) {
+      preloaderKilled = true;
+      setTimeout(function () {
+        if (document.getElementById("rsp-preloader-kill")) return;
+        var st = document.createElement("style");
+        st.id = "rsp-preloader-kill";
+        st.textContent = ".preloader{display:none !important;opacity:0 !important;pointer-events:none !important;}";
+        document.head.appendChild(st);
+      }, 600);
+    }
   }
 
   // ---- In-map loading indicator -----------------------------
@@ -1876,7 +1912,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.25",
+    version: "1.0.26",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1886,7 +1922,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.25 boot path attached (sidebar :has fix, continuous terrain height, model loads only at close zoom). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.26 boot path attached (continuous stray-card sweep + preloader kill rule). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
