@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.27 — 2026-07-16
+
+### Fixed
+- **Late Finsweet batches were silently dropped on slow loads.** The continuous-render MutationObserver self-stopped after 30 s of DOM idle; on slow networks the last Finsweet batch landed AFTER that stop, so its items were never processed (70 markers missing from the map in live diagnosis: 630 items in DOM vs 560 processed) and their baked-in `is--show` cards were never swept (the "cards on load" the user still saw on v1.0.26). The observer now NEVER self-stops (it is cheap — it only counts items on childList mutations), and a 5 s drift net additionally (a) forces a render if the DOM item count changed unnoticed and (b) sweeps stray `is--show` cards even on class-only mutations.
+- Removed a secondary bug in the old idle timer: it updated the seen-count on change WITHOUT scheduling a render.
+
+
 ## v1.0.26 — 2026-06-16
 
 ### Fixed

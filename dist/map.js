@@ -1845,21 +1845,24 @@ function __rsp_main() {
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
-    // Safety stop: if no DOM activity for 30s, disconnect the observer.
-    var idleSince = Date.now();
-    var idleTimer = setInterval(function () {
+    // The observer NEVER self-stops. It used to disconnect after 30 s
+    // of DOM idle, but on slow networks Finsweet's last batch can land
+    // AFTER that stop — those items were then never processed (markers
+    // missing from the map) and never swept (their baked-in `is--show`
+    // cards stayed open). The observer is cheap: it only counts items
+    // when a childList mutation fires.
+    //
+    // Drift safety net: every 5 s, (a) force a render if the DOM item
+    // count changed without the observer noticing, and (b) sweep stray
+    // `is--show` cards even when no items were added (covers class-only
+    // mutations, e.g. a Webflow interaction re-opening cards).
+    setInterval(function () {
       var n = document.querySelectorAll(".locations-map_item").length;
-      if (n === lastTotalSeen) {
-        if (Date.now() - idleSince > 30000) {
-          observer.disconnect();
-          clearInterval(idleTimer);
-          console.log("[RSP] Continuous renderer stopped after idle. Final feature count:",
-            mapLocations.features.length);
-        }
-      } else {
-        idleSince = Date.now();
+      if (n !== lastTotalSeen) {
         lastTotalSeen = n;
+        schedule();
       }
+      stripStrayShownCards();
     }, 5000);
   }
 
@@ -1912,7 +1915,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.26",
+    version: "1.0.27",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1922,7 +1925,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.26 boot path attached (continuous stray-card sweep + preloader kill rule). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.27 boot path attached (observer never self-stops; 5s drift net catches late Finsweet batches). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
