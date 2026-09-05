@@ -81,7 +81,7 @@ function __rsp_main() {
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
     "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#4DA1A9", iconKey: "companies" },
-    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#9B5DE5", iconKey: "projects" },
+    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#2E5077", iconKey: "projects" },
     "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
     "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
@@ -1045,17 +1045,30 @@ function __rsp_main() {
               // Recolor the (texture-less) mesh to the source colour so
               // the model reads as part of its category, matching the
               // footprint polygon. Keep a little shading via roughness.
+              // v1.0.29: authored models keep their own colours.
+              // A glTF with ONE material is an AI/photogrammetry export
+              // (untextured stone) -> tint it with the source colour as
+              // before. A glTF with TWO OR MORE materials was authored
+              // deliberately (e.g. white facade + darker glass built in
+              // Blender) -> keep every material colour, only normalise
+              // metalness/roughness so lighting matches the map.
+              var distinctMats = [];
               obj.traverse(function (o) {
                 if (o.isMesh && o.material) {
-                  var mats = Array.isArray(o.material) ? o.material : [o.material];
-                  mats.forEach(function (mm) {
-                    if (mm.color && mm.color.set) mm.color.set(srcColor);
-                    if ("metalness" in mm) mm.metalness = 0.1;
-                    if ("roughness" in mm) mm.roughness = 0.85;
-                    mm.needsUpdate = true;
+                  (Array.isArray(o.material) ? o.material : [o.material]).forEach(function (mm) {
+                    if (distinctMats.indexOf(mm) === -1) distinctMats.push(mm);
                   });
                 }
               });
+              var keepColors = distinctMats.length >= 2;
+              distinctMats.forEach(function (mm) {
+                if (!keepColors && mm.color && mm.color.set) mm.color.set(srcColor);
+                if ("metalness" in mm) mm.metalness = 0.0;
+                if ("roughness" in mm) mm.roughness = keepColors ? 0.7 : 0.85;
+                mm.needsUpdate = true;
+              });
+              console.log("[RSP] model " + locId + ": " + distinctMats.length + " material(s), " +
+                (keepColors ? "keeping authored colours" : "tinted with source colour"));
               console.log("[RSP] model " + locId + " auto-fit: srcSize=" +
                 size.x.toFixed(2) + "x" + size.y.toFixed(2) + "x" + size.z.toFixed(2) +
                 ", scale=" + s.toFixed(3) +
@@ -1920,7 +1933,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.28",
+    version: "1.0.29",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1930,7 +1943,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.28 boot path attached (sweep guard fix: null-id cards always stripped). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.29 boot path attached (multi-material glTF keeps authored colours). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

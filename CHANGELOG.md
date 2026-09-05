@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.29 — 2026-09-05
+
+### Changed
+- **Projects colour is now brand navy `#2E5077`** (was purple `#9B5DE5`, outside the brand palette). Applies to markers, polygons, filter button, legend and tinted single-material models. Companies stay teal.
+- **Authored glTF models keep their own colours.** Until now every model was recoloured with its source colour (purple for projects), which was right for single-material AI/photogrammetry exports but destroyed deliberately authored models. A glTF with two or more materials (e.g. the Blender-built white facade + darker glass) now keeps every material colour; single-material models are tinted as before. Metalness normalised to 0, roughness 0.7 for authored / 0.85 for tinted. Console logs the material count and which path was taken.
+- New model `assets/models/db-triangle-building.glb` (procedural Blender, 90 KB Draco, 2 materials, 26.5k tris) — first model built for the "white + darker glass" map style.
+
 ## v1.0.28 — 2026-07-16
 
 ### Fixed
