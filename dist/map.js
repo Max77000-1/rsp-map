@@ -80,8 +80,8 @@ function __rsp_main() {
   // ---- Source registry --------------------------------------
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
-    "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#4DA1A9", iconKey: "companies" },
-    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#2E5077", iconKey: "projects" },
+    "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#2E5077", iconKey: "companies" },
+    "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#4DA1A9", iconKey: "projects" },
     "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
     "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
     "tenders":                     { ar: "مناقصات",        en: "Tenders",              color: "#5A7492", iconKey: "tenders" },
@@ -1933,7 +1933,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.29",
+    version: "1.0.30",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1943,7 +1943,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.29 boot path attached (multi-material glTF keeps authored colours). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.30 boot path attached (projects teal, companies navy). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.30 — 2026-09-05
+
+### Changed
+- **Source colours swapped (Maher's decision):** Projects are now teal `#4DA1A9`, Companies are now brand navy `#2E5077`. Applies to markers, polygons, filter buttons, legend and tinted single-material models.
+
 ## v1.0.29 — 2026-09-05
 
 ### Changed
