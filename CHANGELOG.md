@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.31 — 2026-09-05
+
+### Changed
+- **Shade-preserving model tint.** Every glTF model now wears its source colour (v1.0.29 had let multi-material models keep their authored colours; Maher wants them in the source colour too). The brightest material becomes the full source colour and every other material gets the same hue scaled by its authored luminance ratio (floor 0.3), so a Blender model with a white facade and darker glass renders as teal facade + dark-teal glass. Single-material models behave exactly as before.
+
 ## v1.0.30 — 2026-09-05
 
 ### Changed
