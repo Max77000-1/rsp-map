@@ -1035,7 +1035,13 @@ function __rsp_main() {
               obj.scale.set(s, s, s);
               obj.position.x = -center.x * s;
               obj.position.z = -center.z * s;
-              obj.position.y = -box.min.y * s; // base at ground level
+              // v1.0.32: a model whose geometry extends below y=0 carries a
+              // foundation "skirt" (authored to hide the gap on sloping
+              // terrain). Its own y=0 is the ground; only skirt-less models
+              // (AI exports) are grounded at their bounding-box bottom.
+              var hasSkirt = box.min.y < -0.5;
+              obj.position.y = hasSkirt ? 0 : -box.min.y * s; // base at ground level
+              self.footprintM = { hx: (size.x * s) / 2, hz: (size.z * s) / 2 };
               // Register an invisible click box matching the model's real
               // footprint + height, so it's clickable with NO CMS polygon.
               try {
@@ -1105,6 +1111,21 @@ function __rsp_main() {
           if (map.queryTerrainElevation) {
             var el = null;
             try { el = map.queryTerrainElevation(modelOrigin, { exaggerated: true }); } catch (e) {}
+            // v1.0.32: on sloping ground a model grounded at its origin gets
+            // buried on the uphill side. Sample the terrain around the
+            // footprint too and ground the model on the HIGHEST point; the
+            // authored skirt (if any) covers the downhill gap.
+            if (this.footprintM && this.footprintM.hx > 0) {
+              var fp = this.footprintM, latR = modelOrigin[1] * Math.PI / 180;
+              var dLat = 1 / 111320, dLng = 1 / (111320 * Math.cos(latR));
+              var offs = [[1,0],[-1,0],[0,1],[0,-1],[0.7,0.7],[-0.7,0.7],[0.7,-0.7],[-0.7,-0.7]];
+              for (var oi = 0; oi < offs.length; oi++) {
+                var pt = [modelOrigin[0] + offs[oi][0] * fp.hx * 0.8 * dLng, modelOrigin[1] + offs[oi][1] * fp.hz * 0.8 * dLat];
+                var e2 = null;
+                try { e2 = map.queryTerrainElevation(pt, { exaggerated: true }); } catch (e) {}
+                if (e2 !== null && e2 !== undefined && (el === null || el === undefined || e2 > el)) el = e2;
+              }
+            }
             // Lift 1 m to avoid z-fighting with the terrain surface.
             var alt = (el !== null && el !== undefined) ? el + 1 : 0;
             var mc = mapboxgl.MercatorCoordinate.fromLngLat(modelOrigin, alt);
@@ -1938,7 +1959,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.31",
+    version: "1.0.32",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1948,7 +1969,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.31 boot path attached (shade-preserving model tint). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.32 boot path attached (terrain max-grounding + foundation skirts). mapboxgl ready, items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

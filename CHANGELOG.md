@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.32 — 2026-09-06
+
+### Fixed
+- **Models buried on sloping terrain.** The model was grounded on the terrain height at its origin point only, so on a slope everything uphill of the origin sank into the ground (Beaumont: the mall arcade vanished on one side). The terrain is now sampled at the origin plus eight points around the model footprint every frame and the model is grounded on the highest one.
+- **Foundation skirts.** A model whose geometry extends below y=0 (by more than 0.5 m) is treated as carrying an authored foundation skirt: its own y=0 is the ground level (instead of the bounding-box bottom), so the skirt hangs below ground and hides the gap on the downhill side. Skirt-less models (AI exports) behave exactly as before.
+
 ## v1.0.31 — 2026-09-05
 
 ### Changed
