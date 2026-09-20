@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.0.33 — 2026-09-20
+
+### Fixed
+- **Search showed the governorate instead of the project.** The local geocoder read `.card_heading` and that class first matches `.card_heading.mobile`, which holds the governorate badge — every result read "حمص". It now reads `.card_heading:not(.mobile)` (then `.locations-map_name .text-block`), so "بوليفارد النصر" appears under its own name.
+- **Arabic search found nothing.** Query and haystack are now normalised the same way (harakat and tatweel stripped, أ/إ/آ → ا, ة → ه, ى → ي, dashes and underscores to spaces), so "النصر" finds "بوليفارد النصر". Measured before the fix: 0 suggestions for "النصر" and "حمص".
+- **Only the first polygon in a field was drawn.** `parsePolygon` returned the first polygon feature it found, so a throwaway sketch left in a geojson.io export hid the real plot (four projects affected, 2026-08-30). Every polygon in the file is now kept and merged into one MultiPolygon, and degenerate rings — fewer than three distinct points or zero area — are dropped.
+- **The tapped point flew under the mobile card.** Every path that opens a card (point click, polygon click, deep link) now lifts the target by 24% of the viewport height on screens under 768px.
+
+### Changed
+- **Clusters get room on phones.** `clusterRadius` is 60 under 768px (25 elsewhere): at the opening zoom the 25px radius left separate cluster bubbles overlapping each other.
+- **Companies colour.** Source colour is now the lighter navy `#7FA6D4`; the brand navy `#2E5077` was invisible against the navy filter chip it sits on (Maher, 2026-09-20).
+- **mapbox-gl may be deferred.** The boot no longer gives up when `mapboxgl` is missing; it waits up to 15 seconds for the library, so the page can stop loading it render-blocking.
+
 ## v1.0.32 — 2026-09-06
 
 ### Fixed

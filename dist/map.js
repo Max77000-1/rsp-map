@@ -65,9 +65,27 @@ function __rsp_main() {
     console.error("[RSP] window.RSP_MAP_CONFIG.mapboxToken is missing.");
     return;
   }
+  // mapbox-gl may still be downloading (the page is free to defer it).
+  // Wait for it rather than giving up: a hard bail here is why the
+  // library had to stay render-blocking in the page head.
   if (typeof mapboxgl === "undefined" || !mapboxgl.Map) {
-    window.__rsp_err = "MAPBOX_NOT_LOADED";
-    console.error("[RSP] mapboxgl is not available.");
+    if (!window.__rsp_waitgl) {
+      window.__rsp_waitgl = setInterval(function () {
+        if (typeof mapboxgl !== "undefined" && mapboxgl.Map) {
+          clearInterval(window.__rsp_waitgl);
+          window.__rsp_waitgl = null;
+          __rsp_main();
+        }
+      }, 60);
+      setTimeout(function () {
+        if (window.__rsp_waitgl) {
+          clearInterval(window.__rsp_waitgl);
+          window.__rsp_waitgl = null;
+          window.__rsp_err = "MAPBOX_NOT_LOADED";
+          console.error("[RSP] mapboxgl never arrived (15s).");
+        }
+      }, 15000);
+    }
     return;
   }
   var containerEl = document.getElementById("map");
@@ -80,7 +98,7 @@ function __rsp_main() {
   // ---- Source registry --------------------------------------
   // Detected from first item's first link href (e.g., /companies/...)
   var SOURCES = {
-    "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#2E5077", iconKey: "companies" },
+    "companies":                   { ar: "شركات ومكاتب",  en: "Companies",            color: "#7FA6D4", iconKey: "companies" },
     "projects":                    { ar: "مشاريع",         en: "Projects",             color: "#4DA1A9", iconKey: "projects" },
     "investment-opportunities":    { ar: "فرص استثمارية",  en: "Investment Opps.",     color: "#D4A14D", iconKey: "investments" },
     "destruction-area":            { ar: "مناطق منكوبة",   en: "Damaged Areas",        color: "#D46D6D", iconKey: "destruction" },
@@ -319,6 +337,51 @@ function __rsp_main() {
   //   • {type:"Polygon", coordinates:[...]}             → as-is
   //   • [[ [lng,lat], ... ]]                            → wrapped as Polygon
   // Returns a Polygon geometry object or null.
+  // A ring is usable only if it closes over at least three distinct
+  // points and encloses a non-zero area. Two-point "lines" and repeated
+  // vertices come from sketch leftovers and must not reach the map.
+  function ringIsReal(ring) {
+    if (!ring || ring.length < 4) return false;
+    var seen = {}, distinct = 0, area = 0;
+    for (var i = 0; i < ring.length; i++) {
+      var p = ring[i];
+      if (!p || typeof p[0] !== "number" || typeof p[1] !== "number") return false;
+      var k = p[0] + "|" + p[1];
+      if (!seen[k]) { seen[k] = 1; distinct++; }
+      var q = ring[(i + 1) % ring.length];
+      if (q) area += (p[0] * q[1] - q[0] * p[1]);
+    }
+    return distinct >= 3 && Math.abs(area / 2) > 1e-12;
+  }
+
+  function cleanPolygonGeom(g) {
+    if (!g) return null;
+    if (g.type === "Polygon") {
+      var rings = (g.coordinates || []).filter(ringIsReal);
+      return rings.length ? { type: "Polygon", coordinates: rings } : null;
+    }
+    if (g.type === "MultiPolygon") {
+      var polys = [];
+      for (var i = 0; i < (g.coordinates || []).length; i++) {
+        var rings2 = (g.coordinates[i] || []).filter(ringIsReal);
+        if (rings2.length) polys.push(rings2);
+      }
+      return polys.length ? { type: "MultiPolygon", coordinates: polys } : null;
+    }
+    return null;
+  }
+
+  function mergePolygonGeoms(list) {
+    if (!list || !list.length) return null;
+    if (list.length === 1) return list[0];
+    var polys = [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].type === "Polygon") polys.push(list[i].coordinates);
+      else for (var j = 0; j < list[i].coordinates.length; j++) polys.push(list[i].coordinates[j]);
+    }
+    return { type: "MultiPolygon", coordinates: polys };
+  }
+
   function parsePolygon(raw) {
     if (!raw || typeof raw !== "string") return null;
     var s = raw.trim();
@@ -338,17 +401,20 @@ function __rsp_main() {
       return null;
     }
     if (obj.type === "FeatureCollection" && obj.features && obj.features.length) {
+      // Take EVERY polygon in the file, not the first one: geojson.io
+      // exports whatever was drawn, so a throwaway two-point sketch can
+      // sit in front of the real plot and hide it (measured on four
+      // projects, 2026-08-30). Degenerate rings are dropped, the rest
+      // are merged into one MultiPolygon.
+      var kept = [];
       for (var i = 0; i < obj.features.length; i++) {
-        var g = obj.features[i].geometry;
-        if (g && (g.type === "Polygon" || g.type === "MultiPolygon")) return g;
+        var g = cleanPolygonGeom(obj.features[i] && obj.features[i].geometry);
+        if (g) kept.push(g);
       }
-      return null;
+      return mergePolygonGeoms(kept);
     }
-    if (obj.type === "Feature" && obj.geometry) {
-      if (obj.geometry.type === "Polygon" || obj.geometry.type === "MultiPolygon") return obj.geometry;
-      return null;
-    }
-    if (obj.type === "Polygon" || obj.type === "MultiPolygon") return obj;
+    if (obj.type === "Feature" && obj.geometry) return cleanPolygonGeom(obj.geometry);
+    if (obj.type === "Polygon" || obj.type === "MultiPolygon") return cleanPolygonGeom(obj);
     return null;
   }
 
@@ -577,7 +643,10 @@ function __rsp_main() {
       // Pixel radius within which points join a cluster. Lower
       // value = fewer points clumped together, more clusters
       // overall, smaller in size. 25 keeps each cluster <~50.
-      clusterRadius: 25
+      // 25px on a desktop keeps clusters small; on a phone the same
+      // radius leaves separate bubbles overlapping each other at the
+      // opening zoom, so they get more room there.
+      clusterRadius: (window.innerWidth && window.innerWidth < 768) ? 60 : 25
     });
 
     // Cluster circles
@@ -1177,13 +1246,22 @@ function __rsp_main() {
     });
 
     // Click on single point: fly + open sidebar (both layers).
+    // On phones the card covers the lower half of the screen, so every
+    // path that opens a card lifts the target above it.
+    function cardOffset() {
+      return (window.innerWidth && window.innerWidth < 768)
+        ? [0, -Math.round(window.innerHeight * 0.24)]
+        : [0, 0];
+    }
     function handlePointClick(e) {
       var f = e.features && e.features[0];
       if (!f) return;
       var coords = f.geometry.coordinates.slice();
       var locId = f.properties.id;
       stopRotation();
-      map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 12), speed: 0.7, curve: 1 });
+      // On phones the card covers the lower half of the screen, so the
+      // point the visitor just tapped would fly straight underneath it.
+      map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 12), speed: 0.7, curve: 1, offset: cardOffset() });
       openSidebarFor(locId);
     }
     map.on("click", "rsp-points", handlePointClick);
@@ -1217,7 +1295,7 @@ function __rsp_main() {
       stopRotation();
       // Center on polygon centroid for context.
       var c = polygonCentroid(f.geometry);
-      if (c) map.flyTo({ center: c, zoom: Math.max(map.getZoom(), POLYGON_MIN_ZOOM + 1), speed: 0.7, curve: 1 });
+      if (c) map.flyTo({ center: c, zoom: Math.max(map.getZoom(), POLYGON_MIN_ZOOM + 1), speed: 0.7, curve: 1, offset: cardOffset() });
       openSidebarFor(locId);
     });
 
@@ -1277,8 +1355,22 @@ function __rsp_main() {
   // their slug or by their human-readable name extracted from
   // the sidebar card. Returns top matches as Mapbox-Geocoder
   // result objects so they appear above remote suggestions.
+  // Arabic typing varies (أ/إ/ا, ة/ه, ى/ي, harakat, tatweel) and a
+  // visitor searching "النصر" must still find "بوليفارد النصر".
+  function normText(s) {
+    return (s == null ? "" : String(s)).toLowerCase()
+      .replace(/[ً-ْـ]/g, "")   // harakat + tatweel
+      .replace(/[آأإٱ]/g, "ا") // alef forms
+      .replace(/ة/g, "ه")            // ta marbuta -> ha
+      .replace(/ى/g, "ي")            // alef maqsura -> ya
+      .replace(/[​-‏]/g, "")         // zero-width marks
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function localGeocoder(query) {
-    var q = (query || "").trim().toLowerCase();
+    var q = normText(query);
     if (q.length < 2) return [];
     var results = [];
     var seen = {};
@@ -1291,12 +1383,17 @@ function __rsp_main() {
       var name = locId.replace(/-/g, " ");
       var sidebar = document.querySelector('.locations-map_item[data-loc-id="' + (window.CSS && CSS.escape ? CSS.escape(locId) : locId) + '"]');
       if (sidebar) {
-        var heading = sidebar.querySelector(".card_heading, h2, h3, .text-block");
+        // `.card_heading.mobile` holds the GOVERNORATE badge, not the
+        // title — reading it made every result read "حمص" and made the
+        // Arabic name unsearchable (measured 2026-09-19).
+        var heading = sidebar.querySelector(".card_heading:not(.mobile)")
+          || sidebar.querySelector(".locations-map_name .text-block")
+          || sidebar.querySelector(".text-block");
         if (heading && heading.textContent.trim()) {
           name = heading.textContent.trim().slice(0, 80);
         }
       }
-      var hay = (slug + " " + name).toLowerCase();
+      var hay = normText(slug + " " + name);
       if (hay.indexOf(q) === -1) continue;
       if (seen[locId]) continue;
       seen[locId] = true;
@@ -1638,7 +1735,8 @@ function __rsp_main() {
       setTimeout(function () {
         var f = mapLocations.features.find(function (ff) { return ff.properties.id === st.id; });
         if (!f) return;
-        map.flyTo({ center: f.geometry.coordinates, zoom: Math.max(map.getZoom(), 13), speed: 1.5, curve: 1 });
+        map.flyTo({ center: f.geometry.coordinates, zoom: Math.max(map.getZoom(), 13), speed: 1.5, curve: 1,
+          offset: (window.innerWidth && window.innerWidth < 768) ? [0, -Math.round(window.innerHeight * 0.24)] : [0, 0] });
         openSidebarFor(st.id);
       }, 500);
     }
@@ -1959,7 +2057,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.32",
+    version: "1.0.33",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -1969,7 +2067,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.32 boot path attached (terrain max-grounding + foundation skirts). mapboxgl ready, items in DOM:",
+  console.log("[RSP] map.js v1.0.33 boot path attached (search titles + Arabic matching, every polygon kept, mobile clusters + card offset, waits for mapbox-gl). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
