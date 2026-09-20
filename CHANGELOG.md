@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.34 — 2026-09-20
+
+### Changed
+- **Places are Syria-only (Maher's decision).** The geocoder asked Mapbox for places in sy, lb, jo, iq and tr, so a search for "النصر" filled the list with Nasr in Dhi Qar, Erbil, Nineveh and Amman. `countries` is now `sy`. Anything outside Syria may still appear — but only when it is our own data, because `localGeocoder` is not bound by that list.
+- **Our own items fill the suggestions first.** The local matcher stops at 8 instead of 5; the dropdown shows five, so whenever the platform has matches they take every slot and places are pushed out.
+
 ## v1.0.33 — 2026-09-20
 
 ### Fixed

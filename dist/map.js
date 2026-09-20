@@ -1375,7 +1375,10 @@ function __rsp_main() {
     var results = [];
     var seen = {};
     var feats = mapLocations.features;
-    for (var i = 0; i < feats.length && results.length < 5; i++) {
+    // Our own items take the suggestion slots first; the list shows
+    // five, so returning more than five keeps places out whenever we
+    // have matches of our own.
+    for (var i = 0; i < feats.length && results.length < 8; i++) {
       var f = feats[i];
       var locId = f.properties.id || "";
       // Try to extract a name from the matching sidebar item.
@@ -1418,7 +1421,11 @@ function __rsp_main() {
         accessToken: cfg.mapboxToken,
         mapboxgl: mapboxgl,
         placeholder: LOCALE === "ar" ? "ابحث (نقاط أو أماكن)..." : "Search (markers or places)...",
-        countries: "sy,lb,jo,iq,tr",
+        // Places come from Syria only (Maher, 2026-09-20): anything
+        // outside Syria may appear ONLY when it is our own data —
+        // localGeocoder is not bound by this list, so a company or
+        // project abroad still shows.
+        countries: "sy",
         language: LOCALE,
         marker: false,
         zoom: 13,
@@ -2057,7 +2064,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.33",
+    version: "1.0.34",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2067,7 +2074,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.33 boot path attached (search titles + Arabic matching, every polygon kept, mobile clusters + card offset, waits for mapbox-gl). items in DOM:",
+  console.log("[RSP] map.js v1.0.34 boot path attached (places limited to Syria; our own items fill the suggestions first). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
