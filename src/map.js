@@ -752,6 +752,48 @@ function __rsp_main() {
       if (pr && pr.catch) pr.catch(function (e) { console.warn("[RSP] RTL plugin:", e && e.message); });
     } catch (e) {}
   }
+  // Names of the previous era stay hidden (Maher, 2026-09-21): places
+  // named to honour the Assad family or the Baath party and its dates.
+  // The list comes from the whole Syrian place_label set (7,702 names,
+  // swept 2026-09-21), each ambiguous name researched on its own — a
+  // village whose name only means "lion" or names a tribe keeps its label.
+  // More names need no release: hiddenPlaceNames: [...] in RSP_MAP_CONFIG.
+  var HIDDEN_PLACE_NAMES = [
+    // Suburb by Damascus airport, named after Basil al-Assad.
+    "ضاحية الشهيد باسل الأسد بالمطار", "Dahiyat Basil al-Asad",
+    // Hamlet near Qardaha, formerly al-Yabisa (اليابسة).
+    "الباسل", "Al-Basel",
+    // Sarrin hamlet named after the party; replaced an older name.
+    "البعثية", "Al-Ba’athiya", "Al-Ba'athiya",
+    // "8 March" (1963) near Tal Abyad; the local name is Sleib Qiran.
+    "Thamin al-Adhar", "8 آذار", "الثامن من آذار",
+    // Two villages (Raqqa, Hasakah) named after Hafez al-Assad or a regime
+    // post of the 1980s. The spelling with hamza only: خربة الاسدية
+    // (Idlib) is an old ruin name and keeps its label.
+    "الأسدية"
+  ];
+  // Full names of the family, unambiguous inside any longer label.
+  // Compared in lower case, so the Latin spellings match any casing.
+  var HIDDEN_NAME_PARTS = [
+    "باسل الأسد", "حافظ الأسد", "بشار الأسد",
+    "باسل الاسد", "حافظ الاسد", "بشار الاسد",
+    "basil al-asad", "basel al-assad", "bassel al-assad", "hafez al-asad", "hafez al-assad", "hafiz al-asad", "bashar al-asad", "bashar al-assad"
+  ];
+  function hiddenNamesFilter() {
+    var extra = Array.isArray(cfg.hiddenPlaceNames) ? cfg.hiddenPlaceNames : [];
+    var names = [];
+    HIDDEN_PLACE_NAMES.concat(extra).forEach(function (n) {
+      if (typeof n === "string" && n && names.indexOf(n) < 0) names.push(n);
+    });
+    var tests = [];
+    ["name", "name_ar", "name_en"].forEach(function (f) {
+      var v = ["coalesce", ["get", f], ""];
+      // match needs at least one label, and unique ones (deduped above).
+      if (names.length) tests.push(["match", v, names, true, false]);
+      HIDDEN_NAME_PARTS.forEach(function (part) { tests.push(["in", part, ["downcase", v]]); });
+    });
+    return ["!", ["any"].concat(tests)];
+  }
   function labelsLayerSpec() {
     var nameExpr = LOCALE === "ar"
       ? ["coalesce", ["get", "name_ar"], ["get", "name"]]
@@ -769,6 +811,7 @@ function __rsp_main() {
         // localities inside the Golan under an IL code (measured
         // 2026-09-21), which this platform must not show.
         ["==", ["get", "iso_3166_1"], "SY"],
+        hiddenNamesFilter(),
         // Far out the tiles hold only the 17 cities, so all of them show
         // (Damascus and Aleppo alone passed the old limit, and both sit
         // under clusters). From z8 villages arrive; thin them, then let
@@ -2390,7 +2433,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.35",
+    version: "1.0.36",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2400,7 +2443,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.35 boot path attached (terrain on tilt, search from 3 letters, cluster colours, globe glow, place names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.36 boot path attached (terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

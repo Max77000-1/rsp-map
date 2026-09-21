@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.36 — 2026-09-21
+
+### Changed
+- **Place names of the previous era are hidden** (Maher, 2026-09-21): names that honour the Assad family or the Baath party and its dates. The list comes from the whole Syrian `place_label` set (7,702 names, swept tile by tile). Each ambiguous name was researched, and a second reviewer tried to refute every verdict.
+  - Hidden: ضاحية الشهيد باسل الأسد بالمطار · الباسل (formerly اليابسة, near Qardaha) · البعثية (Sarrin) · Thamin al-Adhar ("8 March", near Tal Abyad) · الأسدية (two villages, Raqqa and Hasakah). Any label that holds the full name of Basil, Hafez or Bashar al-Assad is hidden too, in Arabic or Latin.
+  - Kept, with evidence: آذار (Jisr al-Shughur, a name older than 1933) · خربة الاسدية (an old ruin) · مزرعة الرئيس (al-Ruways, mis-rendered) · خربة بشار (a personal name) · the village الأسد in Sarrin (Arabic for the Turkish "Arslan Köy", lion village).
+- Hiding more names needs no release: `hiddenPlaceNames: [...]` in `RSP_MAP_CONFIG`.
+
+Tested over the live page, Arabic and English: every hidden name is in the data at its spot and not drawn, every kept name is still drawn, and the config setting hides an extra name (المزة) that shows without it. Zero errors.
+
 ## v1.0.35 — 2026-09-21
 
 ### Added
