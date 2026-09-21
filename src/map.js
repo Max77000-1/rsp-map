@@ -184,6 +184,43 @@ function __rsp_main() {
     rotating = false;
   }
 
+  // ---- Terrain on demand (v1.0.35) ---------------------------
+  // Terrain only shows when the camera is tilted; flat, it just
+  // downloads elevation tiles. Decided at pitchend, never mid-gesture,
+  // so the ground does not jump while the visitor is still tilting.
+  // Models re-ground every frame (see render below), so they follow
+  // the terrain coming and going.
+  // The map itself is asked whether terrain is on — never a flag of
+  // our own: a style swap (satellite and back) can carry the terrain
+  // over, and a stale flag then leaves it on while flat.
+  var TERRAIN_MIN_PITCH = 5;
+  function syncTerrain() {
+    var want = map.getPitch() >= TERRAIN_MIN_PITCH;
+    var has = !!(map.getTerrain && map.getTerrain());
+    if (want === has) return;
+    try {
+      if (want) {
+        if (!map.getSource("mapbox-dem")) return;
+        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
+      } else {
+        map.setTerrain(null);
+      }
+    } catch (e) {
+      console.warn("[RSP] Terrain toggle failed:", e && e.message);
+    }
+  }
+  map.on("pitchend", syncTerrain);
+  // The custom style imports a basemap that carries its OWN terrain
+  // (exaggeration 0 below z6, 1 from z7 to z12, 0 again by z13.7) and a
+  // hillshade layer on the same DEM (z6-14.5). "Off" here only drops
+  // the extra terrain this file adds on top; the style's own relief
+  // stays as designed, and getTerrain() may then report the style's
+  // terrain. A style swap can re-merge terrain after its imports load,
+  // so idle (fires only when nothing moves) re-checks without a
+  // mid-gesture jump. Measured 2026-09-21, same path (open, Damascus
+  // z9-13 flat, tilt, Home, Aleppo z11): DEM 4.5 MB -> 0.76 MB desktop.
+  map.on("idle", syncTerrain);
+
   // ---- Style toggle (default ↔ satellite) -------------------
   var isSatellite = false;
   var defaultStyle = styleUrl;
@@ -207,6 +244,10 @@ function __rsp_main() {
 
   function toggleMapMode() {
     isSatellite = !isSatellite;
+    // v1.0.35: drop our terrain before the swap so it is not carried
+    // into the new style; the new style's setup turns it back on if
+    // the map is tilted.
+    try { if (map.getTerrain()) map.setTerrain(null); } catch (e) {}
     map.setStyle(isSatellite ? satelliteStyle : defaultStyle);
   }
   // #mapmode click is wired later via document-level event
@@ -626,6 +667,240 @@ function __rsp_main() {
     return expr;
   }
 
+  // ---- Cluster colour (v1.0.35) -----------------------------
+  // "source" (default): a cluster takes the colour of the category it
+  // holds most of, so the visitor reads what is inside before clicking.
+  // "size": the look before v1.0.35 — teal 2-9, navy 10-49, gold 50+.
+  // Rolling back needs no release: clusterColors: "size" in
+  // RSP_MAP_CONFIG (the page loader). The per-category counts are kept
+  // in both modes; the hover preview reads them.
+  var CLUSTER_MODE = cfg.clusterColors === "size" ? "size" : "source";
+  function clusterCountKey(s) { return "n_" + s; }
+  function clusterProps() {
+    var props = {};
+    Object.keys(SOURCES).forEach(function (s) {
+      props[clusterCountKey(s)] = ["+", ["case", ["==", ["get", "source"], s], 1, 0]];
+    });
+    return props;
+  }
+  function clusterColourExpr() {
+    if (CLUSTER_MODE === "size") {
+      return ["step", ["get", "point_count"], "#4DA1A9", 10, "#2E5077", 50, "#D4A14D"];
+    }
+    // First category (in SOURCES order) whose count no other beats
+    // wins; ties go to the earlier one.
+    var keys = Object.keys(SOURCES);
+    var expr = ["case"];
+    keys.forEach(function (s) {
+      var cond = ["all"];
+      keys.forEach(function (o) {
+        if (o !== s) cond.push([">=", ["get", clusterCountKey(s)], ["get", clusterCountKey(o)]]);
+      });
+      expr.push(cond, SOURCES[s].color);
+    });
+    expr.push("#2E5077");
+    return expr;
+  }
+
+  // ---- Globe glow (v1.0.35) ---------------------------------
+  // Navy space and a turquoise halo in the platform palette instead of
+  // the style's grey. globeGlow: false in RSP_MAP_CONFIG keeps the
+  // style's own atmosphere.
+  var GLOBE_FOG = {
+    "range": [0.8, 8],
+    "color": "#dfeaeb",
+    "high-color": "#4DA1A9",
+    // Mapbox's own globe example uses 0.02; 0.12 washed all of space
+    // grey (measured 2026-09-21), so the halo stays a thin band.
+    "horizon-blend": ["interpolate", ["linear"], ["zoom"], 2, 0.03, 5, 0.05, 10, 0.03],
+    "space-color": "#0c1a2b",
+    "star-intensity": ["interpolate", ["linear"], ["zoom"], 2, 0.35, 5, 0.15, 7, 0]
+  };
+  function applyGlobeGlow() {
+    if (cfg.globeGlow === false) return;
+    try { map.setFog(GLOBE_FOG); } catch (e) {
+      console.warn("[RSP] Globe glow not applied:", e && e.message);
+    }
+  }
+
+  // ---- Place names (v1.0.35) --------------------------------
+  // The custom style carries no place names at all. A button next to
+  // Home / Satellite shows them on demand, in the page's language.
+  // Off by default: the map looks as before and fetches nothing extra.
+  // The choice is remembered per visitor (localStorage, best effort).
+  var LABELS_SOURCE = "rsp-streets";
+  var LABELS_LAYER = "rsp-place-labels";
+  // v0.2.3, not v0.3.0: with GL JS 3.7 the newer plugin registers itself
+  // twice in the workers ("RTL text plugin already registered", measured
+  // 2026-09-21); v0.2.3 draws the same Arabic with no error.
+  var RTL_PLUGIN_URL = "https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.2.3/mapbox-gl-rtl-text.js";
+  var labelsOn = false;
+  try { labelsOn = window.localStorage.getItem("rsp-labels") === "1"; } catch (e) {}
+  var rtlRequested = false;
+  function ensureRtlPlugin() {
+    // Arabic needs the shaping plugin. Loaded as soon as the names are
+    // turned on — the "lazy" mode never fetched it by itself, and no
+    // Arabic name was drawn (measured 2026-09-21). Registration is asynchronous and
+    // the status reads "unavailable" for a moment after the call, so a
+    // flag of ours prevents a second registration (which rejects with
+    // "RTL text plugin already registered").
+    if (rtlRequested) return;
+    rtlRequested = true;
+    try {
+      if (mapboxgl.getRTLTextPluginStatus && mapboxgl.getRTLTextPluginStatus() !== "unavailable") return;
+      var pr = mapboxgl.setRTLTextPlugin(RTL_PLUGIN_URL, null, false);
+      if (pr && pr.catch) pr.catch(function (e) { console.warn("[RSP] RTL plugin:", e && e.message); });
+    } catch (e) {}
+  }
+  function labelsLayerSpec() {
+    var nameExpr = LOCALE === "ar"
+      ? ["coalesce", ["get", "name_ar"], ["get", "name"]]
+      : ["coalesce", ["get", "name_en"], ["get", "name"]];
+    return {
+      id: LABELS_LAYER,
+      type: "symbol",
+      source: LABELS_SOURCE,
+      "source-layer": "place_label",
+      filter: ["all",
+        ["match", ["get", "class"], ["settlement", "settlement_subdivision"], true, false],
+        ["match", ["coalesce", ["get", "worldview"], "all"], ["all", "US"], true, false],
+        // Syrian places only — the same line as place search (Maher,
+        // 2026-09-20). Unfiltered, the basemap also names Israeli-built
+        // localities inside the Golan under an IL code (measured
+        // 2026-09-21), which this platform must not show.
+        ["==", ["get", "iso_3166_1"], "SY"],
+        // Far out the tiles hold only the 17 cities, so all of them show
+        // (Damascus and Aleppo alone passed the old limit, and both sit
+        // under clusters). From z8 villages arrive; thin them, then let
+        // them back in as the visitor zooms further.
+        ["<=", ["coalesce", ["get", "filterrank"], 5], ["step", ["zoom"], 5, 8, 3, 10, 4, 12, 5]]
+      ],
+      layout: {
+        "text-field": nameExpr,
+        "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"],
+          5, ["step", ["coalesce", ["get", "symbolrank"], 16], 14, 8, 12, 12, 11],
+          12, ["step", ["coalesce", ["get", "symbolrank"], 16], 18, 10, 15, 14, 13]],
+        "symbol-sort-key": ["coalesce", ["get", "symbolrank"], 16],
+        "text-max-width": 7,
+        "text-padding": 4
+      },
+      paint: {
+        "text-color": isSatellite ? "#ffffff" : "#1f3a5a",
+        "text-halo-color": isSatellite ? "rgba(0,0,0,0.75)" : "rgba(255,255,255,0.9)",
+        "text-halo-width": 1.4
+      }
+    };
+  }
+  function applyLabels() {
+    try {
+      if (!labelsOn) {
+        if (map.getLayer(LABELS_LAYER)) map.setLayoutProperty(LABELS_LAYER, "visibility", "none");
+        return;
+      }
+      ensureRtlPlugin();
+      if (!map.getSource(LABELS_SOURCE)) {
+        map.addSource(LABELS_SOURCE, { type: "vector", url: "mapbox://mapbox.mapbox-streets-v8" });
+      }
+      if (!map.getLayer(LABELS_LAYER)) {
+        // Beneath every layer of ours, so markers stay on top.
+        map.addLayer(labelsLayerSpec(), map.getLayer("rsp-clusters") ? "rsp-clusters" : undefined);
+      } else {
+        map.setLayoutProperty(LABELS_LAYER, "visibility", "visible");
+      }
+    } catch (e) {
+      console.warn("[RSP] Place names not applied:", e && e.message);
+    }
+  }
+  var LABELS_ICON = "data:image/svg+xml;utf8," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 -960 960 960" width="24" fill="#FFFFFF">' +
+    '<path d="M280-160v-520H80v-120h520v120H400v520H280Zm360 0v-320H520v-120h360v120H760v320H640Z"/></svg>');
+  function syncLabelsButton() {
+    var btn = document.getElementById("maplabels");
+    if (!btn) return;
+    btn.classList.toggle("rsp-on", labelsOn);
+    btn.setAttribute("aria-pressed", labelsOn ? "true" : "false");
+  }
+  function mountLabelsButton() {
+    if (document.getElementById("maplabels")) return true;
+    // A copy of the satellite button, so it carries the site's own
+    // button style in both locales and in the phone capsule.
+    var mode = document.getElementById("mapmode");
+    var bar = mode && mode.parentNode;
+    if (!bar) return false;
+    var btn = mode.cloneNode(true);
+    btn.id = "maplabels";
+    var label = LOCALE === "ar" ? "أسماء الأماكن" : "Place names";
+    btn.setAttribute("title", label);
+    btn.setAttribute("aria-label", label);
+    btn.setAttribute("role", "button");
+    var img = btn.querySelector("img");
+    if (img) {
+      img.removeAttribute("srcset");
+      img.removeAttribute("sizes");
+      img.src = LABELS_ICON;
+      img.alt = "";
+    }
+    bar.appendChild(btn);
+    syncLabelsButton();
+    return true;
+  }
+  function toggleLabels() {
+    labelsOn = !labelsOn;
+    try { window.localStorage.setItem("rsp-labels", labelsOn ? "1" : "0"); } catch (e) {}
+    applyLabels();
+    syncLabelsButton();
+  }
+  (function waitForControls() {
+    var tries = 0;
+    (function attempt() {
+      if (mountLabelsButton() || ++tries > 50) return;
+      setTimeout(attempt, 200);
+    })();
+  })();
+
+  // ---- Hover preview (v1.0.35, mouse only) ------------------
+  // Name and category before the click; for a cluster, the top three
+  // categories inside it. Touch screens have no hover and skip it.
+  var CAN_HOVER = !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
+  var hoverPopup = null;
+  function escHtml(v) {
+    return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function hoverDot(src) {
+    var col = (SOURCES[src] && SOURCES[src].color) || "#2E5077";
+    return '<span class="rsp-hover-dot" style="background:' + col + '"></span>';
+  }
+  function hoverItemHtml(props) {
+    return '<div class="rsp-hover-in" dir="' + (LOCALE === "ar" ? "rtl" : "ltr") + '">' +
+      '<div class="rsp-hover-t">' + escHtml(itemTitle(props.id) || String(props.id || "").replace(/-/g, " ")) + "</div>" +
+      '<div class="rsp-hover-c">' + hoverDot(props.source) + escHtml(sourceLabel(props.source)) + "</div></div>";
+  }
+  function hoverClusterHtml(props) {
+    var rows = Object.keys(SOURCES).map(function (s) {
+      return [s, +props[clusterCountKey(s)] || 0];
+    }).filter(function (r) { return r[1] > 0; })
+      .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 3);
+    var html = '<div class="rsp-hover-in" dir="' + (LOCALE === "ar" ? "rtl" : "ltr") + '">';
+    rows.forEach(function (r) {
+      html += '<div class="rsp-hover-c">' + hoverDot(r[0]) + escHtml(sourceLabel(r[0])) +
+        '<b class="rsp-hover-n">' + r[1] + "</b></div>";
+    });
+    return html + "</div>";
+  }
+  function showHover(lngLat, html) {
+    if (!hoverPopup) {
+      hoverPopup = new mapboxgl.Popup({
+        closeButton: false, closeOnClick: false, offset: 14,
+        className: "rsp-hover", maxWidth: "260px"
+      });
+    }
+    hoverPopup.setLngLat(lngLat).setHTML(html).addTo(map);
+  }
+  function hideHover() { if (hoverPopup) hoverPopup.remove(); }
+
   function setupSourceAndLayers() {
     if (map.getSource(SOURCE_ID)) { sourceAdded = true; return true; }
     // Mapbox v3 with projection:globe sometimes leaves
@@ -646,7 +921,9 @@ function __rsp_main() {
       // 25px on a desktop keeps clusters small; on a phone the same
       // radius leaves separate bubbles overlapping each other at the
       // opening zoom, so they get more room there.
-      clusterRadius: (window.innerWidth && window.innerWidth < 768) ? 60 : 25
+      clusterRadius: (window.innerWidth && window.innerWidth < 768) ? 60 : 25,
+      // v1.0.35: per-category counts for the cluster colour and preview.
+      clusterProperties: clusterProps()
     });
 
     // Cluster circles
@@ -656,12 +933,9 @@ function __rsp_main() {
       source: SOURCE_ID,
       filter: ["has", "point_count"],
       paint: {
-        "circle-color": [
-          "step", ["get", "point_count"],
-          "#4DA1A9",   // 2-9
-          10, "#2E5077", // 10-49
-          50, "#D4A14D"  // 50+
-        ],
+        // v1.0.35: colour of the category the cluster holds most of
+        // (clusterColourExpr); "size" mode keeps the old count steps.
+        "circle-color": clusterColourExpr(),
         // Visual size of the cluster bubble. Capped at 26 so
         // very dense clusters do not visually dominate the
         // surrounding terrain.
@@ -691,8 +965,9 @@ function __rsp_main() {
       },
       paint: {
         "text-color": "#ffffff",
-        "text-halo-color": "rgba(0,0,0,0.25)",
-        "text-halo-width": 1
+        // Lighter category colours (companies, blog) need a firmer halo.
+        "text-halo-color": CLUSTER_MODE === "source" ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.25)",
+        "text-halo-width": CLUSTER_MODE === "source" ? 1.2 : 1
       }
     });
 
@@ -834,7 +1109,12 @@ function __rsp_main() {
             maxzoom: 14
           });
         }
-        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.2 });
+        // v1.0.35: terrain is switched on only when the map is tilted
+        // (syncTerrain). Seen from straight above it changes nothing
+        // visible, yet its tiles cost 110-210 KB on the opening view
+        // (measured 2026-09-21), so
+        // let the current pitch decide.
+        syncTerrain();
       } catch (e) {
         console.warn("[RSP] Terrain not available:", e && e.message);
       }
@@ -853,6 +1133,8 @@ function __rsp_main() {
       } catch (e) {
         console.warn("[RSP] Sky layer not available:", e && e.message);
       }
+      applyGlobeGlow();
+      applyLabels();
 
       attachLayerHandlers();
       sourceAdded = true;
@@ -1231,7 +1513,34 @@ function __rsp_main() {
   }
 
   // Click + hover handlers on the rendered layers.
+  // Layer-bound listeners live on the map, not on the style, so they
+  // survive a style swap. Attaching them again on every style.load
+  // (satellite and back) made each click fire twice. Once is enough.
+  var layerHandlersAttached = false;
   function attachLayerHandlers() {
+    if (layerHandlersAttached) return;
+    layerHandlersAttached = true;
+    if (CAN_HOVER) {
+      ["rsp-points", "rsp-points-centroid"].forEach(function (lid) {
+        map.on("mousemove", lid, function (e) {
+          var f = e.features && e.features[0];
+          if (f) showHover(f.geometry.coordinates, hoverItemHtml(f.properties));
+        });
+        map.on("mouseleave", lid, hideHover);
+      });
+      map.on("mousemove", "rsp-clusters", function (e) {
+        var f = e.features && e.features[0];
+        if (f) showHover(f.geometry.coordinates, hoverClusterHtml(f.properties));
+      });
+      map.on("mouseleave", "rsp-clusters", hideHover);
+      map.on("mousemove", "rsp-polygons-fill", function (e) {
+        var f = e.features && e.features[0];
+        if (f) showHover(e.lngLat, hoverItemHtml(f.properties));
+      });
+      map.on("mouseleave", "rsp-polygons-fill", hideHover);
+      map.on("movestart", hideHover);
+      map.on("click", hideHover);
+    }
     // Click on cluster: zoom in.
     map.on("click", "rsp-clusters", function (e) {
       var features = map.queryRenderedFeatures(e.point, { layers: ["rsp-clusters"] });
@@ -1369,6 +1678,22 @@ function __rsp_main() {
       .trim();
   }
 
+  // Title of an item as its card shows it; null when the card is not
+  // in the DOM yet.
+  function itemTitle(locId) {
+    if (!locId) return null;
+    var card = document.querySelector('.locations-map_item[data-loc-id="' + (window.CSS && CSS.escape ? CSS.escape(locId) : locId) + '"]');
+    if (!card) return null;
+    // `.card_heading.mobile` holds the GOVERNORATE badge, not the
+    // title — reading it made every result read "حمص" and made the
+    // Arabic name unsearchable (measured 2026-09-19).
+    var heading = card.querySelector(".card_heading:not(.mobile)")
+      || card.querySelector(".locations-map_name .text-block")
+      || card.querySelector(".text-block");
+    var txt = heading && heading.textContent.trim();
+    return txt ? txt.slice(0, 80) : null;
+  }
+
   function localGeocoder(query) {
     var q = normText(query);
     if (q.length < 2) return [];
@@ -1383,19 +1708,7 @@ function __rsp_main() {
       var locId = f.properties.id || "";
       // Try to extract a name from the matching sidebar item.
       var slug = locId.toLowerCase();
-      var name = locId.replace(/-/g, " ");
-      var sidebar = document.querySelector('.locations-map_item[data-loc-id="' + (window.CSS && CSS.escape ? CSS.escape(locId) : locId) + '"]');
-      if (sidebar) {
-        // `.card_heading.mobile` holds the GOVERNORATE badge, not the
-        // title — reading it made every result read "حمص" and made the
-        // Arabic name unsearchable (measured 2026-09-19).
-        var heading = sidebar.querySelector(".card_heading:not(.mobile)")
-          || sidebar.querySelector(".locations-map_name .text-block")
-          || sidebar.querySelector(".text-block");
-        if (heading && heading.textContent.trim()) {
-          name = heading.textContent.trim().slice(0, 80);
-        }
-      }
+      var name = itemTitle(locId) || locId.replace(/-/g, " ");
       var hay = normText(slug + " " + name);
       if (hay.indexOf(q) === -1) continue;
       if (seen[locId]) continue;
@@ -1426,6 +1739,9 @@ function __rsp_main() {
         // localGeocoder is not bound by this list, so a company or
         // project abroad still shows.
         countries: "sy",
+        // v1.0.35: every keystroke past minLength is a billed Mapbox
+        // Geocoding request; two letters rarely name a place anyway.
+        minLength: 3,
         language: LOCALE,
         marker: false,
         zoom: 13,
@@ -1604,6 +1920,7 @@ function __rsp_main() {
       var id = el.id;
       if (id === "RestMap") { actionHome(); return; }
       if (id === "mapmode") { ev.preventDefault(); toggleMapMode(); return; }
+      if (id === "maplabels") { ev.preventDefault(); toggleLabels(); return; }
       if (id === "Zoom")    { actionZoom(); return; }
       if (id === "Next")    { actionNext(); return; }
       el = el.parentNode;
@@ -1892,6 +2209,15 @@ function __rsp_main() {
     // The main map still carries the required Mapbox attribution control.
     css.push(".mapboxgl-ctrl-geocoder--powered-by{display:none !important;}");
 
+    // v1.0.35: place-names button pressed state, and the hover preview.
+    css.push("#maplabels.rsp-on{background-color:#4DA1A9 !important;}");
+    css.push(".rsp-hover{pointer-events:none;}" +
+      ".rsp-hover .mapboxgl-popup-content{padding:8px 11px;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.18);font-family:inherit;}" +
+      ".rsp-hover-t{font-weight:600;color:#2E5077;font-size:13px;line-height:1.35;}" +
+      ".rsp-hover-c{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:12px;color:#5A7492;}" +
+      ".rsp-hover-dot{width:8px;height:8px;border-radius:50%;flex:none;}" +
+      ".rsp-hover-n{margin-inline-start:auto;padding-inline-start:10px;color:#2E5077;}");
+
     var styleEl = document.createElement("style");
     styleEl.setAttribute("data-rsp", "map-styles");
     styleEl.textContent = css.join("\n");
@@ -2064,7 +2390,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.34",
+    version: "1.0.35",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2074,7 +2400,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.34 boot path attached (places limited to Syria; our own items fill the suggestions first). items in DOM:",
+  console.log("[RSP] map.js v1.0.35 boot path attached (terrain on tilt, search from 3 letters, cluster colours, globe glow, place names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

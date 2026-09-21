@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.0.35 — 2026-09-21
+
+### Added
+- **Place names on demand.** The custom style carries no place names at all. A third button beside Satellite / Home (`#maplabels`, a copy of the satellite button so it keeps the site's style) shows them in the page's language — Arabic on `/ar`, English on `/map` — from Mapbox Streets v8 `place_label`. Off by default (the map looks as before and fetches nothing extra); the choice is remembered per visitor. **Syrian places only** (`iso_3166_1 == "SY"`), the same line as place search: unfiltered, the basemap also names Israeli-built localities inside the Golan under an IL code. All 17 cities show far out; villages are thinned from z8 and return as the visitor zooms in. The Arabic shaping plugin (v0.2.3) loads when the names are turned on — its "lazy" mode never fetched it by itself and no Arabic name was drawn; v0.3.0 threw "RTL text plugin already registered" with GL JS 3.7.
+- **Hover preview (mouse only).** Name and category of a point or area before the click; for a cluster, its top three categories with counts. Touch screens skip it.
+- **Clusters coloured by what they hold.** A cluster takes the colour of the category it holds most of (per-category counts via `clusterProperties`). The previous look — teal / navy / gold by count — returns with `clusterColors: "size"` in `RSP_MAP_CONFIG`, no release needed.
+- **Globe glow in the platform palette.** Navy space, stars and a thin halo instead of the style's grey. `globeGlow: false` keeps the style's own atmosphere.
+
+### Changed
+- **Terrain only when the map is tilted.** Seen from straight above our terrain changes nothing visible, yet it downloaded elevation tiles at every zoom. `syncTerrain()` turns it on at `pitchend` from 5° and off below, re-checks on `idle`, and drops it before a style swap. The style's own relief (its imported basemap has a hillshade layer and its own terrain) stays as designed. Measured on the live page, same path (open, Damascus z9–13 flat, tilt, Home, Aleppo z11): elevation tiles **4.5 MB → 0.76 MB** on desktop, 2.9 → 2.75 MB on a phone (where the style's hillshade dominates); opening view 212 KB → 3 KB.
+- **Place search starts at three letters.** Two letters rarely name a place, and each keystroke past `minLength` is a Mapbox Geocoding request. `minLength` is 3 (plugin default 2).
+
+### Fixed
+- **Every click fired twice after a satellite switch.** Layer-bound listeners live on the map and survive a style swap; attaching them again on each `style.load` doubled them. `attachLayerHandlers()` now runs once.
+
+### Not changed
+- The auto-rotation (`setInterval` + `rotateTo` every 50 ms) was a candidate for a lighter rewrite, but on the live page it never runs: its only triggers are `#Zoom`, which the page does not have, and `#Next`, which is hidden.
+
+### Page
+- The phone capsule is centred on its width: three 40 px buttons + 46 px search = 173 px (was 131 px). That number lives in the map page's head code and changes in the same publish.
+
 ## v1.0.34 — 2026-09-20
 
 ### Changed
