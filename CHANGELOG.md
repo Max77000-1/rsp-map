@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.38 — 2026-09-22
+
+- The building mask now also uses each model's real ground footprint: on load, every triangle is projected to the ground and rasterised into 2 m cells, and the convex hull of those cells becomes the model's outline. Base-map buildings whose centroid or any corner lies inside a model polygon, inside that outline, or within 4 m of the footprint are hidden — so models with no CMS polygon (Zamzam, Beaumont, Financial Centre) are masked too, and so are buildings in the gaps between a model's blocks.
+- Flat building outlines (fill/line layers on the `building` source-layer) are masked alongside the 3D extrusions.
+- Debug: `window.__rsp.footprints`.
+
 ## v1.0.37 — 2026-09-22
 
 - Base-map buildings inside a model project's footprint polygon are now actually hidden. The v1.0.2x `within` filter never matched a building (Mapbox evaluates `within` for Point/LineString features only); buildings are now excluded by feature id when their centroid lies inside the polygon, refreshed as tiles load. Measured on Yaafour villas: 79 drawn before, 0 inside after.

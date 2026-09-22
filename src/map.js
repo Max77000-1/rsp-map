@@ -1282,11 +1282,88 @@ function __rsp_main() {
     for (var k = 0; k < cs.length; k++) { x += cs[k][0]; y += cs[k][1]; }
     return [x / cs.length, y / cs.length];
   }
+  // v1.0.38: a model can reach beyond its CMS polygon (or have no polygon
+  // at all), so each loaded model also registers its REAL ground footprint:
+  // every triangle projected onto the ground and rasterised into 2 m cells.
+  // A building is hidden when its centroid or any corner lies inside a
+  // model polygon OR within FOOT_PAD_M of that footprint.
+  var modelFootprints = Object.create(null);       // locId -> { lng, lat, occ }
+  var FOOT_CELL_M = 2, FOOT_PAD_M = 4;
+  function registerModelFootprint(locId, lng, lat, obj) {
+    var occ = Object.create(null), n = 0;
+    var inv = 1 / FOOT_CELL_M;
+    function mark(x, y) { var k = Math.floor(x * inv) + "," + Math.floor(y * inv); if (!occ[k]) { occ[k] = 1; n++; } }
+    var va = new THREE.Vector3(), vb = new THREE.Vector3(), vc = new THREE.Vector3();
+    obj.updateMatrixWorld(true);
+    obj.traverse(function (o) {
+      if (!o.isMesh || !o.geometry || !o.geometry.attributes || !o.geometry.attributes.position) return;
+      var pos = o.geometry.attributes.position, idx = o.geometry.index;
+      var triCount = idx ? idx.count / 3 : pos.count / 3;
+      for (var t = 0; t < triCount; t++) {
+        var i0 = idx ? idx.getX(3 * t) : 3 * t, i1 = idx ? idx.getX(3 * t + 1) : 3 * t + 1, i2 = idx ? idx.getX(3 * t + 2) : 3 * t + 2;
+        va.fromBufferAttribute(pos, i0).applyMatrix4(o.matrixWorld);
+        vb.fromBufferAttribute(pos, i1).applyMatrix4(o.matrixWorld);
+        vc.fromBufferAttribute(pos, i2).applyMatrix4(o.matrixWorld);
+        // glTF x = east, -z = north (see the custom-layer transform below)
+        var ax = va.x, ay = -va.z, bx = vb.x, by = -vb.z, cx = vc.x, cy = -vc.z;
+        mark(ax, ay); mark(bx, by); mark(cx, cy);
+        var den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+        if (Math.abs(den) < 1e-6) continue;              // vertical face
+        var x0 = Math.floor(Math.min(ax, bx, cx) * inv), x1 = Math.floor(Math.max(ax, bx, cx) * inv);
+        var y0 = Math.floor(Math.min(ay, by, cy) * inv), y1 = Math.floor(Math.max(ay, by, cy) * inv);
+        for (var gx = x0; gx <= x1; gx++) for (var gy = y0; gy <= y1; gy++) {
+          var px = (gx + 0.5) * FOOT_CELL_M, py = (gy + 0.5) * FOOT_CELL_M;
+          var w1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / den;
+          var w2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / den;
+          if (w1 >= 0 && w2 >= 0 && w1 + w2 <= 1) { var k = gx + "," + gy; if (!occ[k]) { occ[k] = 1; n++; } }
+        }
+      }
+    });
+    // Convex hull of the occupied cells: the model's outline on the ground,
+    // so base-map buildings BETWEEN the model's blocks (courtyards, gaps
+    // between villa rows) are hidden too, not only those under a roof.
+    var cpts = Object.keys(occ).map(function (k) { var a = k.split(","); return [(+a[0] + 0.5) * FOOT_CELL_M, (+a[1] + 0.5) * FOOT_CELL_M]; });
+    cpts.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+    function cross(o, a, b) { return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]); }
+    var lo = [], hi = [];
+    for (var ci = 0; ci < cpts.length; ci++) {
+      while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], cpts[ci]) <= 0) lo.pop();
+      lo.push(cpts[ci]);
+    }
+    for (var cj = cpts.length - 1; cj >= 0; cj--) {
+      while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], cpts[cj]) <= 0) hi.pop();
+      hi.push(cpts[cj]);
+    }
+    lo.pop(); hi.pop();
+    var hull = lo.concat(hi);
+    modelFootprints[locId] = { lng: lng, lat: lat, occ: occ, hull: hull, cos: Math.cos(lat * Math.PI / 180) };
+    console.log("[RSP] model " + locId + " ground footprint: " + n + " cells of " + FOOT_CELL_M + " m, hull " + hull.length + " pts");
+    for (var lid in maskedIds) maskedIds[lid].__retest = true;
+    applyBuildingMask();
+  }
+  function underModel(p) {
+    var pad = Math.ceil(FOOT_PAD_M / FOOT_CELL_M);
+    for (var id in modelFootprints) {
+      var fp = modelFootprints[id];
+      var x = (p[0] - fp.lng) * 111320 * fp.cos, y = (p[1] - fp.lat) * 111320;
+      if (fp.hull && fp.hull.length > 2 && pointInRing([x, y], fp.hull)) return true;
+      var gx = Math.floor(x / FOOT_CELL_M), gy = Math.floor(y / FOOT_CELL_M);
+      for (var dx = -pad; dx <= pad; dx++) for (var dy = -pad; dy <= pad; dy++) {
+        if (fp.occ[(gx + dx) + "," + (gy + dy)]) return true;
+      }
+    }
+    return false;
+  }
+  function featureCorners(g) {
+    if (g.type === "Polygon") return g.coordinates[0] || [];
+    if (g.type === "MultiPolygon") return (g.coordinates[0] && g.coordinates[0][0]) || [];
+    return [];
+  }
   function applyBuildingMask() {
     var rings = mapPolygons.features.filter(function (f) {
       return f.properties && f.properties.isModel && f.geometry && f.geometry.type === "Polygon";
     }).map(function (f) { return f.geometry.coordinates[0]; });
-    if (!rings.length) return;
+    if (!rings.length && !Object.keys(modelFootprints).length) return;
     if (!maskListener) {
       maskListener = true;
       map.on("sourcedata", function (e) {
@@ -1298,7 +1375,9 @@ function __rsp_main() {
     try { style = map.getStyle(); } catch (e) { return; }
     if (!style || !style.layers) return;
     style.layers.forEach(function (ly) {
-      if (ly.type !== "fill-extrusion" || !ly.source || !ly["source-layer"]) return;
+      if (!ly.source || !ly["source-layer"]) return;
+      // 3D extrusions, plus the flat building outlines (fill/line on the building layer)
+      if (!(ly.type === "fill-extrusion" || (ly["source-layer"] === "building" && (ly.type === "fill" || ly.type === "line")))) return;
       if (ly.id.indexOf("rsp-") === 0) return;       // our own layers
       if (!(ly.id in maskedBuildingLayers)) {
         var base = null;
@@ -1307,18 +1386,22 @@ function __rsp_main() {
         maskedIds[ly.id] = Object.create(null);
       }
       var seen = maskedIds[ly.id], added = 0, feats = [];
+      var force = false; if (seen.__retest) { delete seen.__retest; force = true; }   // new footprint: re-apply
       try { feats = map.querySourceFeatures(ly.source, { sourceLayer: ly["source-layer"] }); } catch (e) { feats = []; }
       for (var k = 0; k < feats.length; k++) {
         var f = feats[k];
         if (f.id == null || seen[f.id]) continue;
         var c = featureCentroid(f.geometry);
         if (!c) continue;
-        for (var r = 0; r < rings.length; r++) {
-          if (pointInRing(c, rings[r])) { seen[f.id] = true; added++; break; }
+        var pts = [c].concat(featureCorners(f.geometry)), hit = false;
+        for (var q = 0; q < pts.length && !hit; q++) {
+          for (var r = 0; r < rings.length; r++) { if (pointInRing(pts[q], rings[r])) { hit = true; break; } }
+          if (!hit && underModel(pts[q])) hit = true;
         }
+        if (hit) { seen[f.id] = true; added++; }
       }
-      if (!added) return;                            // nothing new in the loaded tiles
-      var ids = Object.keys(seen).map(Number);
+      if (!added && !force) return;                  // nothing new in the loaded tiles
+      var ids = Object.keys(seen).map(Number).filter(function (v) { return !isNaN(v); });
       if (!ids.length) return;
       try { map.setFilter(ly.id, combineFilter(maskedBuildingLayers[ly.id], ["!", ["in", ["id"], ["literal", ids]]])); } catch (e) {}
     });
@@ -1478,6 +1561,7 @@ function __rsp_main() {
                 var realH = size.y * s;
                 pushModelHitBox(locId, lng, lat, (size.x * s) / 2, (size.z * s) / 2, realH > 0 ? realH : effHeightM);
               } catch (e) {}
+              try { registerModelFootprint(locId, lng, lat, obj); } catch (e) { console.warn("[RSP] footprint failed for " + locId, e); }
               // Recolor the (texture-less) mesh to the source colour so
               // the model reads as part of its category, matching the
               // footprint polygon. Keep a little shading via roughness.
@@ -2469,7 +2553,8 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.37",
+    footprints: modelFootprints,
+    version: "1.0.38",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2479,7 +2564,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.37 boot path attached (base-map buildings hidden inside model footprints by feature id, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.38 boot path attached (base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
