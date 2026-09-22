@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.40 — 2026-09-22
+
+- Fix a race in v1.0.39: the basemap/own-building swap ran once, and when it ran before the Mapbox Standard import finished loading the import reset `show3dObjects` to true while `building-extrusion` stayed at opacity 0 — so some loads showed the unmasked basemap buildings. The swap is now idempotent and re-asserted on `style.load`, `style.import.load`, `idle` and every mask pass.
+
 ## v1.0.39 — 2026-09-22
 
 - The visible white 3D buildings were the imported Mapbox Standard basemap's own objects, which GL JS 3.7 cannot filter per feature; the style's `building-extrusion` layer (the one the mask filters) was drawn at opacity 0, so v1.0.37/38 hid nothing a visitor could see. The basemap's `show3dObjects` is now off and `building-extrusion` is shown in off-white from zoom 15.5. Verified on Yaafour villas: no building among or under the villas, neighbours unchanged.
