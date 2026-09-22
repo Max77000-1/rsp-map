@@ -1258,33 +1258,69 @@ function __rsp_main() {
   }
 
   // ---- Hide base-map buildings inside model footprints ------
-  // Uses the Mapbox "within" filter expression to exclude any
-  // building-extrusion feature whose geometry lies inside a model
-  // footprint polygon. Applied once per style load.
-  var maskedBuildingLayers = Object.create(null);
+  // v1.0.37: the Mapbox "within" expression only evaluates Point and
+  // LineString features, so the v1.0.2x filter never hid a single
+  // building (measured on Yaafour: 79 of 79 still drawn). Instead we
+  // read the building features from the vector source, keep those
+  // whose centroid falls inside a model footprint polygon, and exclude
+  // them by feature id. Ids accumulate as tiles arrive (sourcedata).
+  var maskedBuildingLayers = Object.create(null);  // layerId -> original filter
+  var maskedIds = Object.create(null);             // layerId -> { id: true }
+  var maskListener = false, maskTimer = null;
+  function pointInRing(p, r) {
+    var c = false;
+    for (var i = 0, j = r.length - 1; i < r.length; j = i++) {
+      var a = r[i], b = r[j];
+      if (((a[1] > p[1]) !== (b[1] > p[1])) && (p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0])) c = !c;
+    }
+    return c;
+  }
+  function featureCentroid(g) {
+    var cs = g.type === "Polygon" ? g.coordinates[0] : (g.type === "MultiPolygon" ? g.coordinates[0][0] : null);
+    if (!cs || !cs.length) return null;
+    var x = 0, y = 0;
+    for (var k = 0; k < cs.length; k++) { x += cs[k][0]; y += cs[k][1]; }
+    return [x / cs.length, y / cs.length];
+  }
   function applyBuildingMask() {
-    var modelPolys = mapPolygons.features.filter(function (f) {
-      return f.properties && f.properties.isModel && f.geometry &&
-             f.geometry.type === "Polygon";
-    });
-    if (!modelPolys.length) return;
-    var mp = { type: "MultiPolygon", coordinates: modelPolys.map(function (f) { return f.geometry.coordinates; }) };
-    var exclude = ["!", ["within", mp]];
+    var rings = mapPolygons.features.filter(function (f) {
+      return f.properties && f.properties.isModel && f.geometry && f.geometry.type === "Polygon";
+    }).map(function (f) { return f.geometry.coordinates[0]; });
+    if (!rings.length) return;
+    if (!maskListener) {
+      maskListener = true;
+      map.on("sourcedata", function (e) {
+        if (!e || !e.isSourceLoaded) return;
+        clearTimeout(maskTimer); maskTimer = setTimeout(applyBuildingMask, 250);
+      });
+    }
     var style;
     try { style = map.getStyle(); } catch (e) { return; }
     if (!style || !style.layers) return;
     style.layers.forEach(function (ly) {
-      if (ly.type !== "fill-extrusion") return;
+      if (ly.type !== "fill-extrusion" || !ly.source || !ly["source-layer"]) return;
       if (ly.id.indexOf("rsp-") === 0) return;       // our own layers
-      if (maskedBuildingLayers[ly.id]) {
-        // re-apply with refreshed polygon set (model list may have grown)
-        try { map.setFilter(ly.id, combineFilter(maskedBuildingLayers[ly.id], exclude)); } catch (e) {}
-        return;
+      if (!(ly.id in maskedBuildingLayers)) {
+        var base = null;
+        try { base = map.getFilter(ly.id) || null; } catch (e) { base = null; }
+        maskedBuildingLayers[ly.id] = base;          // remember the original
+        maskedIds[ly.id] = Object.create(null);
       }
-      var base = null;
-      try { base = map.getFilter(ly.id) || null; } catch (e) { base = null; }
-      maskedBuildingLayers[ly.id] = base; // remember original
-      try { map.setFilter(ly.id, combineFilter(base, exclude)); } catch (e) {}
+      var seen = maskedIds[ly.id], added = 0, feats = [];
+      try { feats = map.querySourceFeatures(ly.source, { sourceLayer: ly["source-layer"] }); } catch (e) { feats = []; }
+      for (var k = 0; k < feats.length; k++) {
+        var f = feats[k];
+        if (f.id == null || seen[f.id]) continue;
+        var c = featureCentroid(f.geometry);
+        if (!c) continue;
+        for (var r = 0; r < rings.length; r++) {
+          if (pointInRing(c, rings[r])) { seen[f.id] = true; added++; break; }
+        }
+      }
+      if (!added) return;                            // nothing new in the loaded tiles
+      var ids = Object.keys(seen).map(Number);
+      if (!ids.length) return;
+      try { map.setFilter(ly.id, combineFilter(maskedBuildingLayers[ly.id], ["!", ["in", ["id"], ["literal", ids]]])); } catch (e) {}
     });
   }
   function combineFilter(base, extra) {
@@ -2433,7 +2469,7 @@ function __rsp_main() {
   // Expose a small diagnostic surface for live debugging without
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
-    version: "1.0.36",
+    version: "1.0.37",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2443,7 +2479,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.36 boot path attached (terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.37 boot path attached (base-map buildings hidden inside model footprints by feature id, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

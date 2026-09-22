@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.37 — 2026-09-22
+
+- Base-map buildings inside a model project's footprint polygon are now actually hidden. The v1.0.2x `within` filter never matched a building (Mapbox evaluates `within` for Point/LineString features only); buildings are now excluded by feature id when their centroid lies inside the polygon, refreshed as tiles load. Measured on Yaafour villas: 79 drawn before, 0 inside after.
+
 ## v1.0.36 — 2026-09-21
 
 ### Changed
