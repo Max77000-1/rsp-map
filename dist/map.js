@@ -1124,6 +1124,18 @@ function __rsp_main() {
       // model stays clickable even when the item has NO polygon. Mapbox
       // queryRenderedFeatures returns it, so clicking the model opens
       // the project sidebar.
+      // v1.0.39: the white 3D buildings on screen come from the imported
+      // Mapbox Standard basemap, which v3.7 cannot filter per feature; our own
+      // "building-extrusion" layer was drawn at opacity 0. Swap them: turn the
+      // basemap's 3D objects off and show our layer instead, so the model mask
+      // (applyBuildingMask) actually hides what the visitor sees.
+      try {
+        if (map.setConfigProperty) map.setConfigProperty("basemap", "show3dObjects", false);
+        if (map.getLayer("building-extrusion")) {
+          map.setPaintProperty("building-extrusion", "fill-extrusion-color", "#f3f3f1");
+          map.setPaintProperty("building-extrusion", "fill-extrusion-opacity", ["interpolate", ["linear"], ["zoom"], 15, 0, 15.5, 1]);
+        }
+      } catch (e) { console.warn("[RSP] basemap building swap failed", e); }
       if (!map.getSource(MODEL_HIT_SOURCE_ID)) {
         map.addSource(MODEL_HIT_SOURCE_ID, { type: "geojson", data: modelHitCollection() });
       }
@@ -2554,7 +2566,7 @@ function __rsp_main() {
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
     footprints: modelFootprints,
-    version: "1.0.38",
+    version: "1.0.39",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2564,7 +2576,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.38 boot path attached (base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.39 boot path attached (own building layer replaces basemap 3D objects, base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

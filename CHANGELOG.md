@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.39 — 2026-09-22
+
+- The visible white 3D buildings were the imported Mapbox Standard basemap's own objects, which GL JS 3.7 cannot filter per feature; the style's `building-extrusion` layer (the one the mask filters) was drawn at opacity 0, so v1.0.37/38 hid nothing a visitor could see. The basemap's `show3dObjects` is now off and `building-extrusion` is shown in off-white from zoom 15.5. Verified on Yaafour villas: no building among or under the villas, neighbours unchanged.
+
 ## v1.0.38 — 2026-09-22
 
 - The building mask now also uses each model's real ground footprint: on load, every triangle is projected to the ground and rasterised into 2 m cells, and the convex hull of those cells becomes the model's outline. Base-map buildings whose centroid or any corner lies inside a model polygon, inside that outline, or within 4 m of the footprint are hidden — so models with no CMS polygon (Zamzam, Beaumont, Financial Centre) are masked too, and so are buildings in the gaps between a model's blocks.
