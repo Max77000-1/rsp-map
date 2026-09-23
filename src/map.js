@@ -194,8 +194,28 @@ function __rsp_main() {
   // our own: a style swap (satellite and back) can carry the terrain
   // over, and a stale flag then leaves it on while flat.
   var TERRAIN_MIN_PITCH = 5;
+  // v1.0.41: a terrain-following model (Sham View: blocks seated on a 150 m
+  // slope, geometry reaching ~260 m below its reference) is buried under the
+  // flat map when terrain is off, so seen from straight above it vanished.
+  // Keep terrain on whenever a 3D model is in view at model zoom, whatever
+  // the pitch. Cost stays bounded: only at z>=14 and only near a model.
+  function modelInView() {
+    if (map.getZoom() < 14) return false;
+    var b; try { b = map.getBounds(); } catch (e) { return false; }
+    for (var id in modelHitFeatures) {
+      var ring = modelHitFeatures[id] && modelHitFeatures[id].geometry && modelHitFeatures[id].geometry.coordinates[0];
+      if (!ring) continue;
+      var w = Infinity, e2 = -Infinity, s2 = Infinity, n2 = -Infinity;
+      for (var k = 0; k < ring.length; k++) {
+        w = Math.min(w, ring[k][0]); e2 = Math.max(e2, ring[k][0]);
+        s2 = Math.min(s2, ring[k][1]); n2 = Math.max(n2, ring[k][1]);
+      }
+      if (e2 >= b.getWest() && w <= b.getEast() && n2 >= b.getSouth() && s2 <= b.getNorth()) return true;
+    }
+    return false;
+  }
   function syncTerrain() {
-    var want = map.getPitch() >= TERRAIN_MIN_PITCH;
+    var want = map.getPitch() >= TERRAIN_MIN_PITCH || modelInView();
     var has = !!(map.getTerrain && map.getTerrain());
     if (want === has) return;
     try {
@@ -210,6 +230,7 @@ function __rsp_main() {
     }
   }
   map.on("pitchend", syncTerrain);
+  map.on("moveend", syncTerrain);   // v1.0.41: zooming onto a model turns terrain on
   // The custom style imports a basemap that carries its OWN terrain
   // (exaggeration 0 below z6, 1 from z7 to z12, 0 again by z13.7) and a
   // hillshade layer on the same DEM (z6-14.5). "Off" here only drops
@@ -2589,7 +2610,7 @@ function __rsp_main() {
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
     footprints: modelFootprints,
-    version: "1.0.40",
+    version: "1.0.41",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2599,7 +2620,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.40 boot path attached (own building layer replaces basemap 3D objects, base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.41 boot path attached (terrain kept on near 3D models, own building layer replaces basemap 3D objects, base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {

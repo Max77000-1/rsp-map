@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.41 — 2026-09-23
+
+- Terrain stays on whenever a 3D model is in view at zoom 14+, not only when the map is tilted 5°+. A terrain-following model (Sham View: 973 blocks seated on a 150 m slope, geometry reaching ~260 m below its reference) sat on the flat map when terrain was off and vanished when seen from straight above. `syncTerrain` now also runs on `moveend`.
+
 ## v1.0.40 — 2026-09-22
 
 - Fix a race in v1.0.39: the basemap/own-building swap ran once, and when it ran before the Mapbox Standard import finished loading the import reset `show3dObjects` to true while `building-extrusion` stayed at opacity 0 — so some loads showed the unmasked basemap buildings. The swap is now idempotent and re-asserted on `style.load`, `style.import.load`, `idle` and every mask pass.
