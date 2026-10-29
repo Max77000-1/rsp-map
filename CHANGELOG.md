@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.0.42 — 2026-10-29
+
+### Fixed
+- **3D models load and draw only near the view.** At zoom 14, anywhere in Syria, the map added a layer for every model on the platform: one custom layer, one WebGL renderer, one Draco decoder pool, nine terrain queries and a forced repaint per frame each. Zooming into Aleppo fetched the Damascus models 300 km away, and the map never went idle.
+  - A model loads once it is within the view plus a margin (1.5 km at street level, half the view's longer side when zoomed out). It draws only when it is within 150 m of the view, so a loaded model off screen costs nothing.
+  - One shared GLTF/Draco loader instead of one per model.
+  - Repaint only while the camera or the terrain height still changes, plus ~0.75 s. A still view lets the map idle.
+  - The three.js libraries are fetched ahead from zoom 12, once a model lies within 10 km of the view, so the first model a visitor pans toward is not held up by them.
+  - Terrain is re-decided once a model finishes loading (the "terrain on while a model is in view" rule of v1.0.41 needs the model's hit box).
+
+Measured over the live page, v1.0.41 vs v1.0.42. Headless Chromium with software WebGL: absolute frame rates mean little, the ratios do.
+| | v1.0.41 | v1.0.42 |
+|---|---|---|
+| Aleppo z14.2, no model on screen | 9 .glb + three.js + Draco, +26 workers | 0 .glb, 0 workers |
+| same, still view | 34 renders/s · 148 ms script/s · 1003 ms tasks/s | 0 · 3 · 37 |
+| Beaumont z16, still view | 9 model layers · 19.7 renders/s · 98 · 1008 | 2 layers (Beaumont + Financial Centre 2 km away) · 0 · 4 · 53 |
+
+Pictures are unchanged: Beaumont from above differs by 0 pixels, tilted by 34 of 1,024,000. Panning toward Beaumont at street level, its .glb is requested 0.77 s before it enters the screen. Zooming in toward it, it arrives when v1.0.41 does.
+
+### Known, not changed here
+- In satellite mode the v1.0.39/40 building swap warns "Style import not found: basemap" on every attempt (the satellite style has no `basemap` import). Present in v1.0.41 as well (60+ warnings in one test against 15 now).
+
 ## v1.0.41 — 2026-09-23
 
 - Terrain stays on whenever a 3D model is in view at zoom 14+, not only when the map is tilted 5°+. A terrain-following model (Sham View: 973 blocks seated on a 150 m slope, geometry reaching ~260 m below its reference) sat on the flat map when terrain was off and vanished when seen from straight above. `syncTerrain` now also runs on `moveend`.

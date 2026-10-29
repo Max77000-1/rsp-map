@@ -1508,21 +1508,101 @@ function __rsp_main() {
   // Below this they would be tiny specks (and waste bandwidth loading
   // three.js + the .glb), so we defer loading until the user is close.
   var MODEL_MIN_ZOOM = 14;
-  var modelZoomBound = false;
-  function syncModelLayers() {
-    // Defer loading entirely until the user is zoomed in.
-    if (map.getZoom() < MODEL_MIN_ZOOM) {
-      if (!modelZoomBound) {
-        modelZoomBound = true;
-        map.on("zoomend", syncModelLayers); // retry when they zoom in
-      }
-      return;
+  // v1.0.42: models load and draw only near the viewport. Until now,
+  // reaching zoom 14 anywhere added a layer for EVERY model on the platform:
+  // one custom layer, one WebGL renderer, one Draco decoder pool and nine
+  // terrain queries per frame each, plus a repaint every frame. Zooming into
+  // Aleppo therefore fetched the Damascus models 300 km away, and the map
+  // never went idle (measured 2026-10-29, nothing on screen: 9 .glb files,
+  // +26 workers, 0 -> 34 renders per second).
+  var MODEL_LOAD_MARGIN_M = 1500; // start loading this far outside the view
+  var MODEL_DRAW_MARGIN_M = 150;  // draw / repaint only this close to the view
+  var modelSyncBound = false;
+  var modelDrawBox = null;        // cached for one frame, shared by all layers
+  function viewBoxAround(marginM) {
+    var b; try { b = map.getBounds(); } catch (e) { return null; }
+    var latMid = (b.getNorth() + b.getSouth()) / 2;
+    var dLat = marginM / 111320;
+    var dLng = marginM / (111320 * Math.max(0.2, Math.cos(latMid * Math.PI / 180)));
+    return { w: b.getWest() - dLng, e: b.getEast() + dLng, s: b.getSouth() - dLat, n: b.getNorth() + dLat };
+  }
+  // The load margin grows with what the screen shows: 1.5 km at street
+  // level, half the view's longer side when zoomed out (~4 km at z14), so a
+  // quick drag still finds the model loaded before it enters the screen.
+  function modelLoadMargin() {
+    var b; try { b = map.getBounds(); } catch (e) { return MODEL_LOAD_MARGIN_M; }
+    var latMid = (b.getNorth() + b.getSouth()) / 2;
+    var spanM = Math.max((b.getNorth() - b.getSouth()) * 111320,
+                         (b.getEast() - b.getWest()) * 111320 * Math.cos(latMid * Math.PI / 180));
+    return Math.max(MODEL_LOAD_MARGIN_M, spanM / 2);
+  }
+  // Is a model of the given radius (m) at lng/lat close enough to be drawn?
+  function modelDrawn(lng, lat, radiusM) {
+    if (!modelDrawBox) modelDrawBox = viewBoxAround(MODEL_DRAW_MARGIN_M);
+    if (!modelDrawBox) return true; // cannot tell: draw, as before
+    var dLat = radiusM / 111320;
+    var dLng = radiusM / (111320 * Math.max(0.2, Math.cos(lat * Math.PI / 180)));
+    return lng + dLng >= modelDrawBox.w && lng - dLng <= modelDrawBox.e &&
+           lat + dLat >= modelDrawBox.s && lat - dLat <= modelDrawBox.n;
+  }
+  // One shared loader: GLTFLoader keeps no per-model state, and a
+  // DRACOLoader owns a worker pool plus a wasm decoder, which must exist once.
+  var sharedModelLoader = null;
+  function getModelLoader() {
+    if (sharedModelLoader) return sharedModelLoader;
+    var loader = new THREE.GLTFLoader();
+    // Attach a Draco decoder so compressed .glb files load.
+    if (THREE.DRACOLoader) {
+      try {
+        var draco = new THREE.DRACOLoader();
+        draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
+        loader.setDRACOLoader(draco);
+      } catch (e) { console.warn("[RSP] DRACOLoader setup failed", e); }
     }
-    var feats = mapLocations.features;
+    sharedModelLoader = loader;
+    return loader;
+  }
+  function bindModelSync() {
+    if (modelSyncBound) return;
+    modelSyncBound = true;
+    var lastMoveSync = 0;
+    map.on("zoomend", syncModelLayers);
+    map.on("moveend", syncModelLayers);
+    // While flying toward a model, start loading it on the way (throttled).
+    map.on("move", function () {
+      var now = Date.now();
+      if (now - lastMoveSync > 400) { lastMoveSync = now; syncModelLayers(); }
+    });
+    map.on("render", function () { modelDrawBox = null; });
+  }
+  // The three.js libraries (~650 KB) are fetched ahead, from zoom 12, once
+  // a model lies within 10 km of the view; otherwise the first model a
+  // visitor pans toward waits for them and appears late.
+  var MODEL_PREFETCH_M = 10000;
+  var threePrefetched = false;
+  function inBox(box, lng, lat) {
+    return lng >= box.w && lng <= box.e && lat >= box.s && lat <= box.n;
+  }
+  function syncModelLayers() {
+    bindModelSync();
+    // Defer loading entirely until the user is zoomed in.
+    var z = map.getZoom();
+    if (z < MODEL_MIN_ZOOM - 2) return;
+    var feats = mapLocations.features, box = null, pre = null;
     for (var i = 0; i < feats.length; i++) {
       var p = feats[i].properties;
       if (!p.modelUrl) continue;
       if (modelLayerIds[p.id]) continue; // already added or in progress
+      if (!pre) { pre = viewBoxAround(MODEL_PREFETCH_M); if (!pre) return; }
+      if (!inBox(pre, p.modelLng, p.modelLat)) continue;
+      if (!threePrefetched) {
+        threePrefetched = true;
+        ensureThree().catch(function () { threePrefetched = false; });
+      }
+      if (z < MODEL_MIN_ZOOM) continue;
+      if (!box) { box = viewBoxAround(modelLoadMargin()); if (!box) return; }
+      // Not near the view: leave it unloaded until the visitor gets close.
+      if (!inBox(box, p.modelLng, p.modelLat)) continue;
       modelLayerIds[p.id] = "rsp-model-" + p.id; // claim slot to avoid double-add
       addModelLayer(p.id, p.modelLng, p.modelLat, p.modelUrl, p.modelHeightM || 0, p.source, p.modelRotDeg || 0, p.modelScalePct || 100);
     }
@@ -1563,15 +1643,7 @@ function __rsp_main() {
           this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
           this.map = map;
           var self = this;
-          var loader = new THREE.GLTFLoader();
-          // Attach a Draco decoder so compressed .glb files load.
-          if (THREE.DRACOLoader) {
-            try {
-              var draco = new THREE.DRACOLoader();
-              draco.setDecoderPath("https://www.gstatic.com/draco/versioned/decoders/1.5.6/");
-              loader.setDRACOLoader(draco);
-            } catch (e) { console.warn("[RSP] DRACOLoader setup failed", e); }
-          }
+          var loader = getModelLoader();
           loader.load(modelUrl, function (gltf) {
             // Auto-fit: many .glb files (especially from trimesh /
             // photogrammetry tools) are normalized into a unit cube
@@ -1618,6 +1690,10 @@ function __rsp_main() {
                 pushModelHitBox(locId, lng, lat, (size.x * s) / 2, (size.z * s) / 2, realH > 0 ? realH : effHeightM);
               } catch (e) {}
               try { registerModelFootprint(locId, lng, lat, obj); } catch (e) { console.warn("[RSP] footprint failed for " + locId, e); }
+              // v1.0.42: the model now loads when the visitor arrives, so the
+              // "terrain on while a model is in view" decision (made at
+              // moveend) must be taken again once its hit box exists.
+              try { syncTerrain(); } catch (e) {}
               // Recolor the (texture-less) mesh to the source colour so
               // the model reads as part of its category, matching the
               // footprint polygon. Keep a little shading via roughness.
@@ -1658,6 +1734,8 @@ function __rsp_main() {
               console.warn("[RSP] model auto-fit failed for " + locId, e);
             }
             self.scene.add(gltf.scene);
+            self._sig = null;           // the next render counts as a change
+            self.map.triggerRepaint();  // the map may be idle by now (see render)
           }, undefined, function (err) {
             console.warn("[RSP] Failed to load glTF model for " + locId, err);
           });
@@ -1671,6 +1749,10 @@ function __rsp_main() {
           // up close. Skipping the draw (and triggerRepaint) lets the map
           // go idle, so it costs nothing while far away.
           if (this.map && this.map.getZoom() < MODEL_MIN_ZOOM) return;
+          // v1.0.42: a model away from the view costs nothing: no terrain
+          // queries, no matrices, no draw, and no forced repaint.
+          var drawRadiusM = this.footprintM ? Math.max(this.footprintM.hx, this.footprintM.hz) : 300;
+          if (!modelDrawn(modelOrigin[0], modelOrigin[1], drawRadiusM)) return;
           // Terrain elevation: the model origin must sit on the RENDERED
           // terrain surface, not at sea level. Damascus is ~680 m up; a
           // sea-level model would be buried. We re-query EVERY frame (not
@@ -1715,7 +1797,17 @@ function __rsp_main() {
           this.camera.projectionMatrix = m.multiply(l);
           this.renderer.resetState();
           this.renderer.render(this.scene, this.camera);
-          this.map.triggerRepaint();
+          // v1.0.42: keep repainting while the camera or the terrain height
+          // still changes, plus ~0.75 s to settle. A still view then lets the
+          // map idle instead of redrawing at 60 fps forever. Anything that
+          // changes the picture later (tiles arriving, a move) renders the map
+          // by itself, and the first changed frame restarts the count.
+          var changed = !this._sig || Math.abs(this._sigZ - modelTransform.translateZ) > 1e-12;
+          if (!changed) {
+            for (var si = 0; si < 16; si++) { if (Math.abs(this._sig[si] - matrix[si]) > 1e-9) { changed = true; break; } }
+          }
+          if (changed) { this._sig = Array.prototype.slice.call(matrix); this._sigZ = modelTransform.translateZ; this._still = 0; }
+          if (changed || this._still++ < 45) this.map.triggerRepaint();
         }
       };
       try { map.addLayer(customLayer); }
@@ -2610,7 +2702,7 @@ function __rsp_main() {
   // breaking encapsulation. Read-only consumers expected.
   window.__rsp = {
     footprints: modelFootprints,
-    version: "1.0.41",
+    version: "1.0.42",
     map: map,
     config: cfg,
     sources: SOURCES,
@@ -2620,7 +2712,7 @@ function __rsp_main() {
     rerender: function () { renderNow(); },
     visibility: function () { return Object.assign({}, visibility); }
   };
-  console.log("[RSP] map.js v1.0.41 boot path attached (terrain kept on near 3D models, own building layer replaces basemap 3D objects, base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview). items in DOM:",
+  console.log("[RSP] map.js v1.0.42 boot path attached (terrain kept on near 3D models, own building layer replaces basemap 3D objects, base-map buildings hidden under the real model footprint and inside model polygons, terrain on tilt, search from 3 letters, cluster colours, globe glow, place names without previous-era names, hover preview, models load near the view only). items in DOM:",
     document.querySelectorAll(".locations-map_item").length);
   })();
   } catch (e) {
